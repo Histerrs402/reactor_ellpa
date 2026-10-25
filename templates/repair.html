@@ -1,0 +1,191 @@
+{% extends "base.html" %}
+{% from "macros.html" import level_badge, days, status_date, presence as presence_badge, act, cstate, tat, demo_badge with context %}
+{% set turl = track_url(i) %}
+{% block title %}{{ i.et }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>{% if turl %}<a class="et-trk" href="{{ turl }}" target="_blank" rel="noopener" title="Открыть ремонт в трекинге портала (новая вкладка)">{{ i.et }}<span class="arrow">↗</span></a>{% else %}{{ i.et }}{% endif %} {{ presence_badge(i) }} {{ demo_badge(i) }}</h1>
+    <p>{{ i.model or 'модель не указана' }}{% if i.brand %} · {{ i.brand }}{% endif %}{% if i.category %} · {{ i.category }}{% endif %} · лист {{ i.source_sheet }}</p>
+  </div>
+  <div class="btn-row">{% if turl %}<a class="btn" href="{{ turl }}" target="_blank" rel="noopener">Открыть в трекинге ↗</a>{% endif %}<a class="btn" href="javascript:history.back()">← Назад</a></div>
+</div>
+
+{% if m10 %}<div class="note {{ 'error' if m10.state == 'overdue' else 'warn' if m10.state == 'soon' else '' }}">
+  <b>Модель со сроком {{ m10.days }} дней от приёма в ремонт:</b> <span class="badge {{ m10.cls }}">{{ m10.label }}</span> {{ m10.detail }}
+  {% if i.accepted_at %} · принят {{ i.accepted_at|d }}{% if m10.acc_tat is not none %} · TAT от приёма {{ m10.acc_tat|f2 }}{% endif %}{% endif %}
+  · <a href="{{ url_for('models10_page') }}">раздел «Срок {{ m10.days }} дней»</a></div>{% endif %}
+{% if anrp %}<div class="note {{ 'error' if anrp.state == 'late' else 'warn' }}">
+  <b>{{ anrp.title }}</b> — <span class="badge {{ anrp.cls }}">{{ anrp.label }}</span> {{ anrp.detail }}{% if anrp.reason %} · причина: {{ anrp.reason }}{% endif %}
+  · ремонт в статусе «{{ i.status }}» · <a href="{{ url_for('acts_page') }}">раздел «Акт утверждён»</a></div>{% endif %}
+{% if i.demo %}<div class="note">Демо-ремонт (комментарий «{{ i.demo_comment }}»): критичность и договорные сроки по нему не считаются, в «Требуют внимания» он не попадает.</div>{% endif %}
+{% if i.closed %}<div class="note">Статус «{{ i.status }}» — ремонт полностью закрыт: в контроле и списках по умолчанию не участвует.</div>{% endif %}
+{% if i.contract and not i.demo and not i.closed %}
+    <div class="card">
+      <div class="card-head"><h2>Договорные сроки СЦ</h2><a class="small" href="{{ url_for('contract_page') }}">все ремонты</a></div>
+      <div class="tbl-wrap"><table class="tbl ctable">
+        <tr><th>Норматив</th><th>Начало (приём)</th><th>Контрольная дата</th><th class="num">Прошло р.д.</th><th class="num">Исключено р.д.</th><th class="num">Допустимо</th><th class="num">Осталось / просрочка</th><th>Состояние</th></tr>
+        {% for key, label in CNORMS %}{% set c = i.contract[key] %}
+        <tr>
+          <td><b>{{ label }}</b>{% if c.variant %}<span class="sub muted small">{{ 'с запчастями' if c.variant == 'B' else 'без запчастей' }}</span>{% endif %}</td>
+          <td class="nowrap">{{ c.start|d if c.applicable else '' }}</td>
+          <td>{{ c.control|d if c.control else '' }}<span class="sub muted small">{{ c.control_label or '' }}</span>
+            {% if c.waiting %}<span class="sub small">ждёт ЗЧ с {{ c.waiting.since|d }}: {{ c.waiting.work_days }} р.д. ({{ c.waiting.cal_days }} к.д.)</span>{% endif %}</td>
+          <td class="num">{{ c.elapsed if c.elapsed is not none else '—' }}</td>
+          <td class="num">{{ c.excluded or '' }}{% if c.approx %} <span class="approx" title="Поступление ЗЧ определено приблизительно">≈</span>{% endif %}</td>
+          <td class="num">{{ c.norm_days or '—' }}</td>
+          <td class="num">{% if c.overdue_by %}<b style="color:var(--high)">+{{ c.overdue_by }}</b>{% elif c.remaining is not none %}{{ c.remaining }}{% else %}—{% endif %}
+            {% if c.deadline and c.state in ('in_time','soon') %}<span class="sub muted small">до {{ c.deadline|d }}</span>{% endif %}</td>
+          <td>{{ cstate(c) }}</td>
+        </tr>
+        <tr class="basis-row"><td></td><td colspan="7">{% if c.missing %}<div class="miss">Нет данных для расчёта: {{ c.missing|join('; ') }}</div>{% endif %}
+          <div class="basis">{% for b in c.basis %}<div>{{ b }}</div>{% endfor %}{% if c.applicable %}<div>Календарь: {{ c.calendar }}</div>{% endif %}</div></td></tr>
+        {% endfor %}
+      </table></div>
+      <p class="muted small">Рабочие дни по производственному календарю страны СЦ. Внутренние предупреждения (простой, общий срок 45 дн.) — в блоке «Состояние» ниже и договорные сроки не подменяют.</p>
+    </div>
+    {% endif %}
+
+<div class="grid2">
+  <div>
+    <div class="card">
+      <div class="card-head"><h2>Состояние</h2>{{ level_badge(i) }}</div>
+      <div class="metrics">
+        <div class="metric"><span class="l">Статус</span><span class="v" style="font-size:17px">{{ i.status or '—' }}</span>
+          <span class="s">{% if i.prev_status %}до этого: {{ i.prev_status }}{% else %}&nbsp;{% endif %}</span></div>
+        <div class="metric"><span class="l">Дней в текущем статусе</span><span class="v">{{ days(i) }}</span>
+          <span class="s">{% if i.days_basis == 'source' %}с {{ i.status_date|dt }} (из выгрузки){% elif i.days_basis == 'detected' %}от первого обнаружения {{ i.status_seen_since|dt }}{% else %}&nbsp;{% endif %}</span></div>
+        <div class="metric"><span class="l">Общий возраст ремонта</span><span class="v">{{ i.age_days if i.age_days is not none else '—' }}</span>
+          <span class="s">календ. дней от ДатаСоздания {{ i.created_at|d }}</span></div>
+        <div class="metric tatm"><span class="l">TAT (из Excel)</span><span class="v">{{ tat(i) }}</span>
+          <span class="s">как в выгрузке, на {{ i.as_of|dt }}</span></div>
+        <div class="metric"><span class="l">АСЦ</span><span class="v" style="font-size:15px">{{ i.asc or '—' }}</span>
+          <span class="s">код {{ i.asc_code or '—' }}</span></div>
+      </div>
+      {% if i.present %}
+      <table class="kv">
+        <tr><th>Контроль простоя</th><td>{% if i.stuck_threshold is not none %}порог {{ i.stuck_threshold }} дн. ({{ i.stuck_rule }}){% if i.stuck %} — <b style="color:var(--high)">превышен на {{ i.stuck_over }} дн.</b>{% endif %}{% else %}{{ i.stuck_rule }}{% endif %}</td></tr>
+        <tr><th>Контроль общего срока</th><td>{% if i.overdue_limit is not none %}{{ i.overdue_limit }} дн. ({{ i.overdue_rule }}{% if i.overdue_category %}, «{{ i.overdue_category }}»{% endif %}){% if i.overdue %} — <b style="color:var(--high)">просрочка {{ i.overdue_days }} дн.</b>{% endif %}{% else %}{{ i.overdue_rule }}{% endif %}</td></tr>
+        <tr><th>Расчёт на момент</th><td>{{ i.as_of|dt }} (срез выгрузки)</td></tr>
+      </table>
+      {% endif %}
+      {% if i.reasons %}
+      <h3>Причины предупреждения</h3>
+      {% for r in i.reasons %}<span class="reason">{{ r.text }} <span class="muted small">(+{{ r.points }})</span></span>{% endfor %}
+      {% endif %}
+      {% if i.disappeared %}
+        <h3>Исчезновение из выгрузки</h3>
+        <p>Ремонта нет в выгрузке с {{ i.disappeared_snapshot|dt }}.
+        {% if i.closure_status == 'act' %}Найден {{ 'на портале' if i.closure_info.sheet == 'портал' else 'в листе актов' }}: акт {{ i.closure_info.act_number or '—' }} от {{ i.closure_info.act_date|d }}{% if i.closure_info.status %}, статус «{{ i.closure_info.status }}»{% endif %} — закрытие подтверждено.
+        {% elif i.closure_status == 'manual' %}Отмечен как проверенный{% if i.closure_info.by %} ({{ i.closure_info.by }}){% endif %} {{ i.closure_info.at|dt }}{% if i.closure_info.note %}: {{ i.closure_info.note }}{% endif %}.
+        {% elif i.closure_info and i.closure_info.portal_status %}На портале ремонт есть, статус «{{ i.closure_info.portal_status }}», акта нет (проверено {{ i.closure_info.checked_at|dt }}). Он вышел из фильтра выгрузки — нужна проверка.
+        {% else %}В листе актов не найден. Он мог быть закрыт, исключён из фильтра выгрузки или временно отсутствовать — нужна проверка.{% endif %}</p>
+        {% if i.closure_status in (none, 'unconfirmed') %}
+        <form method="post" action="{{ url_for('repair_resolve', et=i.et) }}" class="btn-row">
+          <input type="hidden" name="action" value="resolve">
+          <input type="text" name="note" placeholder="Что выяснили (например: закрыт, отменён клиентом)" style="flex:1;min-width:240px">
+          <input type="text" name="author" value="{{ author }}" placeholder="Автор" style="width:140px">
+          <button class="btn" type="submit">Отметить проверенным</button>
+        </form>
+        {% elif i.closure_status == 'manual' %}
+        <form method="post" action="{{ url_for('repair_resolve', et=i.et) }}"><input type="hidden" name="action" value="reopen">
+          <input type="hidden" name="author" value="{{ author }}">
+          <button class="btn small" type="submit">Снять отметку</button></form>
+        {% endif %}
+      {% endif %}
+    </div>
+
+
+    <div class="card" id="comments">
+      <h2>Комментарии и действия</h2>
+      <p class="small">Комментарий в «Листе»: {% if i.last_comment %}<b>{{ i.last_comment.text }}</b> <span class="muted">({{ i.last_comment.created_at|dt }})</span>{% else %}<span class="muted">нет</span>{% endif %}
+        · <a href="{{ url_for('sheet', q=i.et, presence='all') }}">открыть в листе</a></p>
+      <p class="muted small">Новый комментарий здесь станет комментарием в «Листе»; прежние остаются в истории ниже.</p>
+      <form method="post" action="{{ url_for('repair_comment', et=i.et) }}">
+        <input type="hidden" name="token" value="{{ token }}">
+        <textarea name="text" placeholder="Что сделано или выяснено по ремонту" required></textarea>
+        <div class="btn-row" style="margin-top:6px">
+          <input type="text" name="author" value="{{ author }}" placeholder="Автор (необязательно)">
+          <button class="btn primary" type="submit">Добавить комментарий</button>
+        </div>
+      </form>
+      {% for c in comments %}
+      <div class="comment-item">
+        <div class="meta">{{ c.created_at|dt }} · {{ c.author or 'без автора' }}
+          {% if c.source == 'excel' %} · <span title="Импортирован из Excel; дата написания там неизвестна, указан момент импорта">из Excel</span>{% elif c.source == 'system' %} · действие{% endif %}</div>
+        <div class="text">{{ c.text }}</div>
+      </div>
+      {% else %}<p class="muted">Комментариев пока нет.</p>{% endfor %}
+    </div>
+  </div>
+
+  <div>
+    <div class="card">
+      <div class="card-head"><h2>АСЦ и контакты</h2>{% if not contacts_loaded %}<a class="small" href="{{ url_for('settings_page', tab='contacts') }}">загрузить справочник</a>{% endif %}</div>
+      <p><b>{{ i.asc or '—' }}</b> <span class="muted small">· код {{ i.asc_code or '—' }}{% if asc_contacts and asc_contacts[0].status %} · {{ asc_contacts[0].status }}{% endif %}</span></p>
+      {% if asc_contacts %}
+      <div class="tbl-wrap"><table class="tbl ctable-contacts">
+        <tr><th>Контактное лицо</th><th>Роль</th><th>E-mail</th><th>Телефон</th></tr>
+        {% for p in asc_contacts %}<tr><td>{{ p.person or '—' }}{% if p.position %}<span class="sub muted small">{{ p.position }}</span>{% endif %}</td>
+          <td class="small">{{ p.role or '' }}</td><td>{% if p.email %}<a href="{{ email_link(p.email, mcfg) }}"{% if mcfg.web_base %} target="_blank" rel="noopener"{% endif %}>{{ p.email }}</a>{% endif %}</td>
+          <td class="small">{{ p.phone or '' }}{% if p.mobile and p.mobile != p.phone %}<span class="sub">{{ p.mobile }}</span>{% endif %}</td></tr>{% endfor %}
+      </table></div>
+      {% elif contacts_loaded %}<p class="muted small">В справочнике контактов нет АСЦ с кодом {{ i.asc_code or '—' }}.</p>
+      {% else %}<p class="muted small">Справочник контактов АСЦ не загружен.</p>{% endif %}
+      {% if msg %}
+      <details class="mail-details" style="margin-top:10px"><summary><b>Письмо в АСЦ по этому ремонту</b></summary>
+        {% include "_mail.html" %}
+      </details>
+      {% endif %}
+    </div>
+    <div class="card">
+      <h2>История изменений</h2>
+      <p class="muted small">Время — когда программа обнаружила изменение при загрузке. Если в выгрузке есть время самого события, оно указано отдельно.
+        Между двумя загрузками могли быть промежуточные изменения, которые не видны в срезах.</p>
+      <ul class="timeline">
+        {% for e in events %}
+        <li class="ev-{{ e.event_type }}">
+          <div><b>{{ EVENT_LABELS.get(e.event_type, e.event_type) }}</b>
+            {% if e.event_type == 'status_changed' %}: {{ e.old_value or '—' }} → {{ e.new_value or '—' }}
+            {% elif e.event_type == 'asc_changed' %}: {{ e.old_value or '—' }} → {{ e.new_value or '—' }}
+            {% elif e.event_type == 'date_changed' %}: {{ e.field }} {{ e.old_value|dt }} → {{ e.new_value|dt }}
+            {% elif e.event_type == 'appeared' %}{% if e.new_value %} в статусе «{{ e.new_value }}»{% endif %}
+            {% elif e.event_type == 'disappeared' %}{% if e.old_value %} (последний статус «{{ e.old_value }}»){% endif %}
+            {% elif e.event_type == 'returned' %}{% if e.old_value %} (отсутствовал с {{ e.old_value|dt }}){% endif %}
+            {% elif e.event_type in ('excel_comment', 'excel_comment_cleared') %}: «{{ (e.new_value or e.old_value or '')|truncate(120) }}»
+            {% elif e.event_type == 'closed_by_act' %}: акт {{ e.new_value or '—' }}
+            {% endif %}</div>
+          <div class="when">обнаружено {{ e.detected_at|dt }}{% if e.snapshot_at %} · срез {{ e.snapshot_at|dt }}{% endif %}
+            {% if e.source_time %} · по выгрузке: {{ e.source_time|dt }}{% endif %}
+            {% set ex = e.extra|fromjson %}{% if e.event_type == 'status_changed' and ex and ex.duration_days is not none %} · в прежнем статусе {{ ex.duration_days|f1 }} дн.{% endif %}
+            {% if e.note %} · {{ e.note }}{% endif %}</div>
+        </li>
+        {% else %}<li class="muted">Событий нет.</li>{% endfor %}
+      </ul>
+    </div>
+
+    <div class="card">
+      <h2>Данные из выгрузки</h2>
+      <table class="kv">
+        <tr><th>Дата создания</th><td>{{ i.created_at|dt }}</td></tr>
+        <tr><th>Дата входа в текущий статус</th><td>{{ status_date(i) }}{% if status_col %} <span class="muted small">({{ status_col }})</span>{% endif %}</td></tr>
+        <tr><th>Дата приёма в АСЦ</th><td>{{ i.accepted_at|dt }}</td></tr>
+        <tr><th>Дата завершения ремонта</th><td>{{ i.completed_at|dt }}</td></tr>
+        <tr><th>Дата готовности к выдаче</th><td>{{ i.ready_at|dt }}</td></tr>
+        <tr><th>Дата акта / номер</th><td>{{ act(i) }} {{ i.act_number or (i.closure_info.act_number if i.closure_info else '') or '' }}</td></tr>
+        <tr><th>Акт АНРП/АТО</th><td>{% if i.anrp_number %}{{ i.anrp_number }} · создан {{ i.anrp_created|dt }} · утверждён {{ i.anrp_approved|dt }}{% else %}—{% endif %}</td></tr>
+        <tr><th>Дата изменения записи</th><td>{{ i.modified_at|dt }} <span class="muted small">(любая правка, не только статус)</span></td></tr>
+        <tr><th>Тип ремонта при завершении</th><td>{{ i.repair_type_final or '(пусто)' }}</td></tr>
+        <tr><th>Тип ремонта при создании</th><td>{{ i.repair_type or '—' }}</td></tr>
+        <tr><th>Страна / регион / город</th><td>{{ [i.country, i.region, i.city]|select|join(' / ') or '—' }}</td></tr>
+        <tr><th>Впервые обнаружен программой</th><td>{{ i.first_seen_at|dt }}{% if i.initial_load %} <span class="muted small">(первичная загрузка)</span>{% endif %}</td></tr>
+        {% if i.invalid %}<tr><th>Некорректные значения</th><td>{% for k, v in i.invalid.items() %}<span class="chip">{{ k }}: {{ v }}</span>{% endfor %}</td></tr>{% endif %}
+      </table>
+      <details class="table-view"><summary>Все поля выгрузки ({{ data|length }})</summary>
+        <table class="kv">{% for k, v in data.items() %}<tr><th>{{ k }}</th><td>{{ v }}</td></tr>{% endfor %}</table>
+        <p class="muted small">Персональные данные клиентов (ФИО, телефон, адрес, e-mail, IMEI) в программу не загружаются.</p>
+      </details>
+    </div>
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,132 @@
+{% extends "base.html" %}
+{% block title %}Загрузка данных{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div><h1>Загрузка данных</h1>
+    <p>Программа читает копию файла и не изменяет исходный Excel. При каждой загрузке данные сравниваются с историей: новые ремонты, смены статусов и АСЦ, изменения дат, исчезновения и возвраты.</p></div>
+</div>
+
+{% set api = s.api %}
+<div class="card {{ 'primary-src' if s.source_mode == 'api' }}">
+  <h2>С портала (API){% if s.source_mode == 'api' %} <span class="badge good">используется для «Обновить данные»</span>{% endif %}</h2>
+  <p class="small">Адрес: <code>{{ api.base_url }}</code> · вход: <b>{{ AUTH_LABELS[api.auth] }}</b>{% if api.auth == 'basic' %} —
+    {% if api.login %}логин <b>{{ api.login }}</b>, пароль {{ 'сохранён' if api.password else '<b>не задан</b>'|safe }}{% else %}<b>логин не задан</b>{% endif %}{% endif %}
+    · запросы: <b>{{ api.sources|selectattr('enabled')|map(attribute='name')|join(', ') or 'не выбраны' }}</b>.
+    <a href="{{ url_for('settings_page', tab='source') }}">Настроить</a></p>
+  <p class="small muted">Данные берутся с портала напрямую — так же, как их берёт Power Query в вашей книге. TAT считается от даты создания до момента загрузки.
+    Комментарии хранятся в программе по номеру ET (раздел «Лист»).</p>
+  <form method="post" class="btn-row" style="margin-top:8px">
+    <input type="hidden" name="mode" value="api">
+    <button class="btn" type="submit" formaction="{{ url_for('import_api_test') }}">Проверить подключение</button>
+    <button class="btn primary" type="submit" formaction="{{ url_for('import_start') }}" {{ 'disabled' if job.running }}>Загрузить с портала</button>
+    <label class="check" title="Загрузить, даже если программа предупреждает о сдвиге времени"><input type="checkbox" name="force" value="1"> загрузить принудительно</label>
+  </form>
+  {% if api_check %}
+    {% if api_check.ok %}
+      <div class="note ok">Подключение есть: портал ответил за {{ api_check.seconds }} с, запрос «{{ api_check.source }}», пробных записей: {{ api_check.rows }}, полей: {{ api_check.columns|length }}.</div>
+      {% if api_check.rows == 0 %}<div class="note warn">Запрос вернул 0 записей — проверьте фильтр.</div>{% endif %}
+      {% if api_check.missing %}<div class="note warn">В ответе нет нужных полей: {{ api_check.missing|join(', ') }}. Проверьте «Настройки → Столбцы».</div>{% endif %}
+      <details><summary class="small">Поля в ответе</summary><p class="small muted">{{ api_check.columns|join(', ') }}</p></details>
+    {% else %}
+      <div class="note error">{{ api_check.error }}</div>
+    {% endif %}
+  {% endif %}
+</div>
+
+<div class="card">
+  <h2>Файл выгрузки (Excel){% if s.source_mode != 'api' %} <span class="badge good">используется для «Обновить данные»</span>{% endif %}</h2>
+  <form method="post" id="import-form" action="{{ url_for('import_check') }}">
+    <div class="path-row">
+      <input type="text" name="path" id="path" value="{{ path }}" placeholder="C:\Users\...\OData_open_repairs.xlsm">
+      <button class="btn" type="button" id="pick">Выбрать файл…</button>
+    </div>
+    {% if s.recent_files %}
+    <p class="small muted">Недавние: {% for p in s.recent_files %}<a href="#" class="recent" data-path="{{ p }}">{{ p.replace('\\', '/').split('/')|last }}</a>{{ ', ' if not loop.last }}{% endfor %}</p>
+    {% endif %}
+    <p class="small muted">Листы для загрузки: <b>{{ s.sheets|join(', ') or 'не выбраны' }}</b>; комментарии: <b>{{ s.comments_sheet or 'не загружаются' }}</b>;
+      лист актов: <b>{{ s.closure_sheet or 'не используется' }}</b>. <a href="{{ url_for('settings_page', tab='source') }}">Изменить</a></p>
+    <div class="btn-row" style="margin-top:10px">
+      <button class="btn" type="submit" formaction="{{ url_for('import_check') }}">Проверить структуру</button>
+      <button class="btn primary" type="submit" formaction="{{ url_for('import_start') }}" id="start" {{ 'disabled' if job.running }}>Загрузить данные</button>
+      <label class="check" title="Загрузить, даже если этот файл уже загружался или его данные кажутся старше уже загруженных"><input type="checkbox" name="force" value="1"> загрузить принудительно</label>
+    </div>
+    <p class="small muted" id="pick-msg"></p>
+  </form>
+</div>
+
+<div class="card" id="job-card" {% if not job.running and not job.result %}hidden{% endif %}>
+  <h2 id="job-title">{% if job.running %}Идёт загрузка…{% else %}Результат последней загрузки{% endif %}</h2>
+  <div class="progress"><div id="bar" style="width: {{ job.pct }}%"></div></div>
+  <p id="job-stage" class="small">{{ job.stage }} {{ job.detail }}</p>
+  <div id="job-result">
+  {% set r = job.result %}
+  {% if r %}
+    {% if r.status == 'ok' %}
+      <div class="note ok">Загрузка выполнена. Срез данных: {{ r.snapshot_at|dt }} ({{ r.snapshot_method }}).
+        {% if r.report.api %}С портала получено записей: {% for k, v in r.report.api.rows.items() %}{{ k }} — {{ v|n }}{{ ', ' if not loop.last }}{% endfor %} за {{ r.report.api.seconds }} с.{% endif %}</div>
+      {% set c = r.counts %}
+      <table class="kv" style="max-width:560px">
+        <tr><th>Первичная загрузка ремонтов</th><td>{{ c.initial|n }}</td></tr>
+        <tr><th>Новых ремонтов</th><td>{{ c.new|n }}</td></tr>
+        <tr><th>Ремонтов с изменениями</th><td>{{ c.changed|n }}</td></tr>
+        <tr><th>Исчезли из выгрузки</th><td>{{ c.disappeared|n }}</td></tr>
+        <tr><th>Вернулись в выгрузку</th><td>{{ c.returned|n }}</td></tr>
+        <tr><th>Закрытие подтверждено актом</th><td>{{ c.closed|n }}</td></tr>
+        {% if not r.report.api %}<tr><th>Новых комментариев из Excel</th><td>{{ c.comments|n }}</td></tr>{% endif %}
+        <tr><th>Событий в истории</th><td>{{ c.events|n }}</td></tr>
+      </table>
+      {% set rp = r.report %}
+      {% if rp.duplicates_count %}<div class="note warn">Повторяющиеся ET в выгрузке: {{ rp.duplicates_count }}. Для каждого оставлена строка с самой поздней датой изменения записи.
+        Примеры: {% for et, rows in rp.duplicates.items() %}{% if loop.index <= 5 %}{{ et }} (строки {{ rows|join(', ') }}){{ '; ' if not loop.last }}{% endif %}{% endfor %}</div>{% endif %}
+      {% if rp.blank_et_count %}<div class="note warn">Строк без номера ET: {{ rp.blank_et_count }} — пропущены. {% for s, rows in rp.blank_et.items() %}Лист {{ s }}, строки: {{ rows[:10]|join(', ') }}{% endfor %}</div>{% endif %}
+      {% if rp.invalid_rows %}<div class="note warn">Ремонтов с некорректными значениями дат: {{ rp.invalid_rows }}. Такие значения не используются в расчётах и отмечены в карточке ремонта.</div>{% endif %}
+      {% if rp.snapshot_warning %}<div class="note warn">{{ rp.snapshot_warning }}</div>{% endif %}
+      {% for w in rp.structure_warnings %}<div class="note warn">{{ w }}</div>{% endfor %}
+      {% if not rp.closure_checked and c.disappeared %}<div class="note">{{ 'Исчезнувшие ремонты на портале не проверялись' if rp.api else 'Лист актов не проверялся' }} — они отмечены как неподтверждённые.</div>{% endif %}
+      <div class="btn-row" style="margin-top:10px"><a class="btn primary" href="{{ url_for('attention') }}">Требуют внимания</a><a class="btn" href="{{ url_for('dashboard') }}">Главная панель</a><a class="btn" href="{{ url_for('history') }}">История</a></div>
+    {% elif r.status == 'duplicate' %}
+      <div class="note">{{ r.message }}</div>
+    {% else %}
+      <div class="note error">{{ r.message }}</div>
+    {% endif %}
+  {% endif %}
+  </div>
+</div>
+
+{% if check %}
+<div class="card">
+  <h2>Проверка структуры</h2>
+  {% if check.ok %}<div class="note ok">Структура подходит для загрузки.{% if check.size_mb %} Размер файла {{ check.size_mb }} МБ, изменён {{ check.mtime }}.{% endif %}</div>{% endif %}
+  {% for e in check.errors %}<div class="note error">{{ e }}</div>{% endfor %}
+  {% for w in check.warnings %}<div class="note warn">{{ w }}</div>{% endfor %}
+  {% for w in check.infos %}<div class="note">{{ w }}</div>{% endfor %}
+  {% if check.sheets %}
+  <h3>Листы в книге</h3>
+  <table class="tbl" style="max-width:760px">
+    <tr><th>Лист</th><th class="num">Строк (≈)</th><th class="num">Столбцов</th><th>Похож на выгрузку ремонтов</th><th>Будет загружен</th></tr>
+    {% for sh in check.sheets %}
+    <tr><td>{{ sh.name }}{% if sh.state != 'visible' %} <span class="muted small">(скрыт)</span>{% endif %}</td><td class="num">{{ sh.rows|n }}</td><td class="num">{{ sh.columns }}</td>
+      <td>{{ 'да' if sh.is_repairs else '—' }}</td>
+      <td>{% if sh.name in s.sheets %}<b>да</b>{% elif sh.name == s.comments_sheet %}комментарии{% elif sh.name == s.closure_sheet %}проверка закрытия{% else %}—{% endif %}</td></tr>
+    {% endfor %}
+  </table>
+  {% endif %}
+  {% for sname, ps in check.per_sheet.items() %}
+  <h3>Сопоставление столбцов: {{ sname }}</h3>
+  <table class="tbl" style="max-width:760px">
+    <tr><th>Поле программы</th><th>Ожидаемый столбец</th><th>Найден</th></tr>
+    {% for m in ps.mapping %}
+    <tr><td>{{ m.label }}</td><td><code>{{ m.wanted or '—' }}</code></td><td>{% if m.found %}<span class="badge good">✓ {{ m.found }}</span>{% elif m.wanted %}<span class="badge high">нет</span>{% else %}<span class="muted">не задан</span>{% endif %}</td></tr>
+    {% endfor %}
+  </table>
+  {% endfor %}
+</div>
+{% endif %}
+
+{% if last and last.status == 'error' and not job.result %}
+<div class="card"><h2>Последняя загрузка</h2><div class="note error">{{ last.message }}</div></div>
+{% endif %}
+{% endblock %}
+{% block scripts %}
+<script>initImportPage({{ 'true' if job.running else 'false' }}, {{ job.seq }});</script>
+{% endblock %}

@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% from "macros.html" import level_badge, days, status_date, presence as presence_badge, act, sort_th, pager, filter_bar, select, contract_badges, tat, demo_badge, trk with context %}
+{% block title %}Все ремонты{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div><h1>Все ремонты</h1>
+    <p>Найдено: <b>{{ total|n }}</b>. Строки с предупреждениями отмечены цветной полосой слева; критичность — сумма баллов по причинам.</p></div>
+  <div class="btn-row">
+    <a class="btn" href="{{ url_with(export='xlsx') }}">Выгрузить в Excel</a>
+  </div>
+</div>
+
+{% call filter_bar(f, opts, url_for('repairs'), show_presence=True, show_problem=True) %}
+  <label class="field"><span>Причина</span>
+    <select name="reason"><option value="">Любая</option>
+      {% for k, l in REASONS.items() %}<option value="{{ k }}" {{ 'selected' if f.reason and k in f.reason }}>{{ l }}</option>{% endfor %}
+    </select></label>
+{% endcall %}
+
+<div class="card tight">
+<div class="tbl-wrap">
+<table class="tbl reg">
+  <tr>
+    {{ sort_th('ET / модель', 'et', sort, desc) }}
+    {{ sort_th('Статус', 'status', sort, desc) }}
+    {{ sort_th('АСЦ', 'asc', sort, desc) }}
+    {{ sort_th('Тип ремонта', 'rtype', sort, desc) }}
+    {{ sort_th('Дата создания / возраст', 'created', sort, desc) }}
+    {{ sort_th('Дней в статусе', 'days', sort, desc, 'num') }}
+    {{ sort_th('TAT', 'tat', sort, desc, 'num tatcol') }}
+    {{ sort_th('Договорные сроки', 'contract', sort, desc) }}
+    {{ sort_th('Критичность и причины', 'score', sort, desc) }}
+    {{ sort_th('Последний комментарий', 'comment', sort, desc) }}
+  </tr>
+  {% for i in items %}
+  <tr class="{{ 'lv-' ~ i.level if i.level }} {{ 'gone' if not i.present }} {{ 'demo' if i.demo }} {{ 'has-cm' if i.last_comment }}">
+    <td><a class="et" href="{{ url_for('repair', et=i.et) }}">{{ i.et }}</a> {{ trk(i) }} {{ presence_badge(i) }}<span class="sub muted small">{{ i.model or '' }}</span></td>
+    <td>{{ i.status or '—' }}{% if i.act_date or (i.closure_info and i.closure_info.act_date) %}<span class="sub muted small">акт {{ act(i) }}</span>{% endif %}</td>
+    <td>{{ i.asc or '—' }}</td>
+    <td class="small">{{ i.repair_type_final or '(пусто)' }}</td>
+    <td class="nowrap" title="ДатаСоздания — дата оформления заявки; возраст — календарные дни до среза выгрузки">{{ i.created_at|d }}<span class="sub muted small">{{ i.age_days ~ ' дн.' if i.age_days is not none else '' }}</span></td>
+    <td class="num">{{ days(i) }}{% if i.stuck_threshold is not none and i.present %}<span class="muted small"> / {{ i.stuck_threshold }}</span>{% endif %}<span class="sub muted small nowrap">{% if i.status_date %}с&nbsp;{{ i.status_date|d }}{% elif i.status_seen_since and i.present %}обнар.&nbsp;{{ i.status_seen_since|d }}{% endif %}</span></td>
+    <td class="num tatcol">{{ tat(i) }}</td>
+    <td>{% if i.demo %}<span class="muted small">не считаются</span>{% else %}{{ contract_badges(i) }}{% endif %}</td>
+    <td class="reasons" title="{{ i.reasons|map(attribute='text')|join('; ') }}">{% if i.demo %}{{ demo_badge(i) }} <span class="muted small">не считается</span>{% else %}{{ level_badge(i) }}{% endif %}{% for r in i.reasons[:2] %}<span class="reason">{{ r.short or r.text }}</span>{% endfor %}{% if i.reasons|length > 2 %}<span class="muted small">и ещё {{ i.reasons|length - 2 }}</span>{% endif %}</td>
+    <td class="comment">{% if i.last_comment %}<div class="clip" title="{{ i.last_comment.text }}">{{ i.last_comment.text }}</div><span class="tag-src">{{ i.last_comment.created_at|d }}{% if i.last_comment.source == 'excel' %} · из Excel{% endif %}</span>{% else %}<span class="muted">—</span>{% endif %}</td>
+  </tr>
+  {% else %}
+  <tr><td colspan="10" class="muted">Ничего не найдено. Измените фильтры.</td></tr>
+  {% endfor %}
+</table>
+</div>
+</div>
+{{ pager(page, pages) }}
+<p class="muted small">«Дней в статусе / N» — фактические дни и порог простоя для этого статуса и АСЦ (внутреннее предупреждение). «≥ N» — нижняя граница: даты входа в статус в выгрузке нет.
+  «Дата создания» — столбец ДатаСоздания (оформление заявки), возраст — календарные дни от неё до среза выгрузки.
+  TAT (выделенный столбец) — значение столбца TAT из Excel как есть: та же величина в дробных днях; красным — если больше общего срока ремонта.
+  Ремонты в статусе «Отчет» полностью закрыты и по умолчанию не показываются (см. «Наличие в выгрузке»). Ремонты с комментарием «Демо» помечены «демо» — критичность и договорные сроки по ним не считаются.
+  Договорные сроки (рабочие дни): Д — диагностика, Г — гарантийное обслуживание, Т — техпроверка; «+N» — просрочено сейчас, «✕ +N» — завершено с нарушением, «2/3» — прошло из допустимых, «✓» — завершено в срок, «ждёт ЗЧ» — отсчёт приостановлен, «?» — недостаточно данных. Подробности — в карточке и разделе «Договорные сроки».</p>
+{% endblock %}

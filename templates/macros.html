@@ -1,0 +1,164 @@
+{% macro level_badge(i) -%}
+  {%- if i.level == 'high' -%}<span class="badge high" title="Критичность {{ i.score }} баллов">▲ Высокая · {{ i.score }}</span>
+  {%- elif i.level == 'medium' -%}<span class="badge medium" title="Критичность {{ i.score }} баллов">■ Средняя · {{ i.score }}</span>
+  {%- elif i.level == 'low' -%}<span class="badge low" title="Критичность {{ i.score }} баллов">● Низкая · {{ i.score }}</span>
+  {%- else -%}<span class="muted">—</span>{%- endif -%}
+{%- endmacro %}
+
+{% macro days(i) -%}
+  {%- if i.days_in_status is none -%}<span class="muted">—</span>
+  {%- elif i.days_lower_bound -%}<span class="lb" title="В выгрузке нет даты входа в статус. Отсчёт идёт от первого обнаружения статуса программой ({{ i.status_seen_since|dt }}); сколько ремонт был в статусе до этого — неизвестно.{% if i.days_upper is not none %} Смена статуса произошла между срезами, т.е. не более {{ i.days_upper }} дн.{% endif %}">≥&nbsp;{{ i.days_in_status }}</span>
+  {%- else -%}{{ i.days_in_status }}{%- endif -%}
+{%- endmacro %}
+
+{% macro status_date(i) -%}
+  {%- if i.status_date -%}{{ i.status_date|dt }}
+  {%- elif i.status_seen_since and i.present -%}<span class="muted" title="Даты статуса нет в выгрузке; показан момент первого обнаружения программой">обнаружен {{ i.status_seen_since|d }}</span>
+  {%- else -%}<span class="muted">—</span>{%- endif -%}
+{%- endmacro %}
+
+{% macro presence(i) -%}
+  {%- if i.current and i.closed -%}<span class="badge good" title="Статус «{{ i.status }}» — ремонт полностью закрыт, в контроле не участвует">закрыт</span>
+  {%- elif i.current -%}
+  {%- elif i.disappeared -%}
+    {%- if i.closure_status == 'act' -%}<span class="badge good" title="Найден в листе актов">закрыт актом</span>
+    {%- elif i.closure_status == 'manual' -%}<span class="badge neutral">исчез · проверен</span>
+    {%- else -%}<span class="badge high">исчез · не подтверждён</span>{%- endif -%}
+  {%- elif i.stale -%}<span class="badge neutral" title="Лист этого ремонта не загружался в последний раз">не обновлялся</span>
+  {%- endif -%}
+{%- endmacro %}
+
+{% macro act(i) -%}
+  {%- if i.act_date -%}{{ i.act_date|d }}
+  {%- elif i.closure_info and i.closure_info.act_date -%}<span title="Из листа актов">{{ i.closure_info.act_date|d }}</span>
+  {%- else -%}<span class="muted">—</span>{%- endif -%}
+{%- endmacro %}
+
+{% macro sort_th(label, key, sort, desc, cls='') -%}
+  {%- set active = (sort == key) -%}
+  <th class="{{ cls }}"><a class="{{ 'sorted' if active }}" href="{{ url_with(sort=key, dir=('asc' if active and desc else 'desc')) }}">{{ label }}{% if active %} {{ '↓' if desc else '↑' }}{% endif %}</a></th>
+{%- endmacro %}
+
+{% macro pager(page, pages) -%}
+  {% if pages > 1 %}
+  <div class="pager">
+    {% if page > 1 %}<a href="{{ url_with(page=page-1) }}">← Назад</a>{% endif %}
+    {% for p in range(1, pages + 1) %}
+      {% if p == page %}<span class="cur">{{ p }}</span>
+      {% elif p <= 2 or p > pages - 2 or (p - page)|abs <= 2 %}<a href="{{ url_with(page=p) }}">{{ p }}</a>
+      {% elif p == 3 or p == pages - 2 %}<span class="muted">…</span>{% endif %}
+    {% endfor %}
+    {% if page < pages %}<a href="{{ url_with(page=page+1) }}">Вперёд →</a>{% endif %}
+  </div>
+  {% endif %}
+{%- endmacro %}
+
+{% macro select(name, label, options, selected, empty='Все', width='') -%}
+  <label class="field"><span>{{ label }}</span>
+    <select name="{{ name }}" {% if width %}style="max-width:{{ width }}"{% endif %}>
+      <option value="">{{ empty }}</option>
+      {% for o in options %}<option value="{{ o }}" {{ 'selected' if selected and o in selected }}>{{ o }}</option>{% endfor %}
+    </select>
+  </label>
+{%- endmacro %}
+
+{% macro multiselect(name, label, options, selected, hint='') -%}
+  {%- set sel = selected or [] -%}
+  <div class="field"><span>{{ label }}</span>
+  <details class="ms" data-total="{{ options|length }}">
+    <summary class="ms-btn {{ 'on' if sel }}" title="{{ sel|join(', ') if sel else 'Все значения' }}"><span class="ms-text">
+      {%- if not sel %}Все{% elif sel|length == 1 %}{{ sel[0] }}{% else %}Выбрано {{ sel|length }} из {{ options|length }}{% endif -%}
+    </span></summary>
+    <div class="ms-panel">
+      <div class="ms-actions">
+        <button type="button" class="btn small" data-ms="all">Выбрать все</button>
+        <button type="button" class="btn small" data-ms="none">Снять все</button>
+      </div>
+      <div class="ms-list">
+        {% for o in options %}<label class="ms-item"><input type="checkbox" name="{{ name }}" value="{{ o }}" {{ 'checked' if o in sel }}><span>{{ o }}</span></label>{% endfor %}
+      </div>
+      {% if hint %}<p class="ms-hint">{{ hint }}</p>{% endif %}
+      <button class="btn primary small" type="submit">Применить</button>
+    </div>
+  </details>
+  <input type="hidden" name="{{ name }}_set" value="1">
+  </div>
+{%- endmacro %}
+
+{% macro filter_bar(f, opts, action, show_presence=False, show_q=True, show_problem=False) -%}
+{%- set hint = 'Можно отметить несколько. Ничего не отмечено — все. Выбор запоминается и действует во всех разделах, пока его не снимут.' -%}
+<form class="filters" method="get" action="{{ action }}">
+  {{ multiselect('rtype', 'Тип ремонта', opts.rtype, f.rtype, hint) }}
+  {{ multiselect('status', 'Статус', opts.status, f.status, hint) }}
+  {{ multiselect('country', 'Страна', opts.country, f.country, hint) }}
+  {% if show_q %}<label class="field"><span>Поиск по ET или модели</span>
+    <input type="search" name="q" value="{{ f.q or '' }}" placeholder="ET0000000"></label>{% endif %}
+  {{ select('asc', 'АСЦ', opts.asc, f.asc, width='240px') }}
+  {{ select('brand', 'Бренд', opts.brand, f.brand) }}
+  <label class="field"><span>Модель</span>
+    <input type="text" name="model" list="models" value="{{ (f.model or [''])[0] }}" placeholder="любая"></label>
+  <datalist id="models">{% for m in opts.model %}<option value="{{ m }}">{% endfor %}</datalist>
+  {% if opts.sheet|length > 1 %}{{ select('sheet', 'Лист', opts.sheet, f.sheet) }}{% endif %}
+  <label class="field"><span>Дата создания с</span><input type="date" name="created_from" value="{{ f.created_from.strftime('%Y-%m-%d') if f.created_from else '' }}"></label>
+  <label class="field"><span>по</span><input type="date" name="created_to" value="{{ f.created_to.strftime('%Y-%m-%d') if f.created_to else '' }}"></label>
+  {% if show_presence %}
+  <label class="field"><span>Наличие в выгрузке</span>
+    <select name="presence">
+      {% for v, l in [('current','В работе'),('closed','Закрытые («Отчет»)'),('unconfirmed','Исчезли, не подтверждены'),('disappeared','Все исчезнувшие'),('stale','Не обновлялись'),('all','Все, включая закрытые')] %}
+      <option value="{{ v }}" {{ 'selected' if (f.presence or 'current') == v }}>{{ l }}</option>{% endfor %}
+    </select></label>
+  {% endif %}
+  {% if show_problem %}
+  <label class="field"><span>Предупреждения</span>
+    <select name="problem">
+      <option value="">Все</option>
+      <option value="1" {{ 'selected' if f.problem == '1' }}>Только с предупреждениями</option>
+      <option value="0" {{ 'selected' if f.problem == '0' }}>Без предупреждений</option>
+      <option value="demo" {{ 'selected' if f.problem == 'demo' }}>Только демо</option>
+    </select></label>
+  {% endif %}
+  {% if caller is defined %}{{ caller() }}{% endif %}
+  <div class="btn-row"><button class="btn primary" type="submit">Применить</button>
+    <a class="btn" href="{{ action }}" title="Сбрасывает поиск, АСЦ, даты и прочие поля; выбор типа ремонта, статуса и страны сохраняется">Сбросить</a>
+    {% if f.rtype or f.status or f.country %}<a class="btn" href="{{ action }}?rtype_set=1&amp;status_set=1&amp;country_set=1" title="Снимает и запомненный выбор типа ремонта, статуса и страны">Сбросить всё</a>{% endif %}</div>
+</form>
+{%- endmacro %}
+
+{% macro cshort(c) -%}
+  {%- if c.state == 'overdue' -%}+{{ c.overdue_by }}
+  {%- elif c.state == 'done_late' -%}✕ +{{ c.overdue_by }}
+  {%- elif c.state in ('soon', 'in_time') -%}{{ c.elapsed }}/{{ c.norm_days }}
+  {%- elif c.state == 'done_ok' -%}✓
+  {%- elif c.state == 'waiting' -%}ждёт ЗЧ
+  {%- elif c.state == 'no_data' -%}?
+  {%- elif c.state == 'not_started' -%}…
+  {%- endif -%}
+{%- endmacro %}
+
+{% macro contract_badges(i) -%}
+  {%- set ns = namespace(any=false) -%}
+  {%- for key, label in CNORMS -%}{%- set c = (i.contract or {}).get(key) -%}
+    {%- if c and c.applicable and c.state != 'na' -%}{%- set ns.any = true -%}
+    <span class="cb {{ c.state_class }}" title="{{ c.label }}: {{ c.state_label }}{% if c.elapsed is not none and c.norm_days %} — прошло {{ c.elapsed }} из {{ c.norm_days }} р.д.{% endif %}{% if c.overdue_by %}, сверх нормы {{ c.overdue_by }} р.д.{% endif %}{% if c.missing %} — нет данных: {{ c.missing|join('; ') }}{% endif %}">{{ c.short }} {{ cshort(c) }}</span>
+    {%- endif -%}
+  {%- endfor -%}
+  {%- if not ns.any -%}<span class="muted">—</span>{%- endif -%}
+{%- endmacro %}
+
+{% macro cstate(c) -%}<span class="badge {{ c.state_class }}">{{ c.state_label }}</span>{%- endmacro %}
+
+{% macro tat(i) -%}
+  {%- if i.tat is not none -%}
+    {%- set over = i.overdue_limit is not none and i.tat > i.overdue_limit and not i.demo and not i.closed -%}
+    <span class="tatv {{ 'over' if over }}" title="TAT из Excel: {{ i.tat|f2 }} дн. от создания заявки до обновления выгрузки{% if i.overdue_limit is not none %}; общий срок {{ i.overdue_limit }} дн.{% if over %} — превышен{% endif %}{% endif %}">{{ i.tat|f2 }}</span>
+  {%- else -%}<span class="muted">—</span>{%- endif -%}
+{%- endmacro %}
+
+{% macro demo_badge(i) -%}
+  {%- if i.demo -%}<span class="badge demo" title="Комментарий «{{ i.demo_comment }}» — демо-ремонт, критичность не считается">демо</span>{%- endif -%}
+{%- endmacro %}
+
+{% macro trk(i) -%}
+  {%- set u = track_url(i) -%}
+  {%- if u -%}<a class="trk" href="{{ u }}" target="_blank" rel="noopener" title="Открыть {{ i.et }} в трекинге (новая вкладка)">↗</a>{%- endif -%}
+{%- endmacro %}

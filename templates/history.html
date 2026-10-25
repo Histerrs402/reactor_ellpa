@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+{% from "macros.html" import pager with context %}
+{% block title %}История изменений{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div><h1>История изменений</h1>
+    <p>Все изменения, которые программа обнаружила при загрузках. Время — момент обнаружения; время самого события указано, только если оно есть в выгрузке.</p></div>
+</div>
+
+<form class="filters" method="get">
+  <label class="field"><span>ET</span><input type="search" name="q" value="{{ q }}" placeholder="ET0000000"></label>
+  <label class="field"><span>Тип события</span>
+    <select name="type"><option value="">Все</option>
+      {% for r in type_counts %}<option value="{{ r.event_type }}" {{ 'selected' if etype == r.event_type }}>{{ EVENT_LABELS.get(r.event_type, r.event_type) }} ({{ r.n|n }})</option>{% endfor %}
+    </select></label>
+  <label class="field"><span>Обнаружено с</span><input type="date" name="from" value="{{ d_from }}"></label>
+  <label class="field"><span>по</span><input type="date" name="to" value="{{ d_to }}"></label>
+  <label class="check"><input type="checkbox" name="initial" value="1" {{ 'checked' if show_initial }}> показывать первичную загрузку</label>
+  <div class="btn-row"><button class="btn primary" type="submit">Применить</button><a class="btn" href="{{ url_for('history') }}">Сбросить</a></div>
+</form>
+
+<div class="card tight">
+  <div class="tbl-wrap"><table class="tbl">
+    <tr><th>Обнаружено</th><th>Срез</th><th>ET</th><th>Событие</th><th>Было</th><th>Стало</th><th>По выгрузке</th><th>Примечание</th></tr>
+    {% for e in events %}
+    <tr>
+      <td class="nowrap">{{ e.detected_at|dt }}</td>
+      <td class="nowrap muted">{{ e.snapshot_at|dt if e.snapshot_at else 'действие' }}</td>
+      <td class="et"><a href="{{ url_for('repair', et=e.et) }}">{{ e.et }}</a></td>
+      <td>{{ EVENT_LABELS.get(e.event_type, e.event_type) }}{% if e.event_type == 'date_changed' %}<br><span class="muted small">{{ e.field }}</span>{% endif %}</td>
+      <td class="comment">{% if e.event_type == 'date_changed' %}{{ e.old_value|dt }}{% elif e.event_type in ('closure_manual', 'closure_reopened') %}{{ e.old_value|closure }}{% else %}<div class="clip">{{ e.old_value or '—' }}</div>{% endif %}</td>
+      <td class="comment">{% if e.event_type == 'date_changed' %}{{ e.new_value|dt }}{% elif e.event_type in ('closure_manual', 'closure_reopened') %}{{ e.new_value|closure }}{% else %}<div class="clip">{{ e.new_value or '—' }}</div>{% endif %}</td>
+      <td class="nowrap">{{ e.source_time|dt if e.source_time else '—' }}</td>
+      <td class="small muted">{{ e.note or '' }}</td>
+    </tr>
+    {% else %}<tr><td colspan="8" class="muted">Событий нет{% if not show_initial %} (события первичной загрузки скрыты){% endif %}.</td></tr>{% endfor %}
+  </table></div>
+</div>
+{{ pager(page, pages) }}
+<p class="muted small">Всего по фильтру: {{ total|n }}.</p>
+
+<div class="card tight" style="margin-top:20px">
+  <div class="card-head" style="padding:14px 16px 0"><h2>Журнал загрузок</h2></div>
+  <div class="tbl-wrap"><table class="tbl">
+    <tr><th>№</th><th>Начало</th><th>Файл</th><th>Срез данных</th><th>Результат</th><th class="num">Ремонтов</th><th class="num">Новых</th><th class="num">Изменились</th><th class="num">Исчезли</th><th class="num">Вернулись</th><th class="num">Закрыты актом</th><th class="num">Комм. из Excel</th></tr>
+    {% for im in imports %}
+    <tr>
+      <td>{{ im.id }}</td><td class="nowrap">{{ im.started_at|dt }}</td>
+      <td title="{{ im.file_path }}">{{ im.file_name }}</td>
+      <td class="nowrap">{{ im.snapshot_at|dt if im.snapshot_at else '—' }}{% if im.snapshot_method %}<br><span class="muted small">{{ im.snapshot_method }}</span>{% endif %}</td>
+      <td>{% if im.status == 'ok' %}<span class="badge good">выполнена</span>{% elif im.status == 'duplicate' %}<span class="badge neutral">тот же файл</span>{% elif im.status == 'running' %}<span class="badge low">выполняется</span>{% else %}<span class="badge high">ошибка</span>{% endif %}
+        {% if im.status in ('error', 'duplicate') %}<div class="small muted">{{ im.message }}</div>{% endif %}</td>
+      <td class="num">{{ im.rows_read|n }}</td>
+      <td class="num">{{ im.new_count|n }}{% if im.initial_count %}<br><span class="muted small">первичных {{ im.initial_count|n }}</span>{% endif %}</td>
+      <td class="num">{{ im.changed_count|n }}</td><td class="num">{{ im.disappeared_count|n }}</td>
+      <td class="num">{{ im.returned_count|n }}</td><td class="num">{{ im.closed_count|n }}</td><td class="num">{{ im.comments_new|n }}</td>
+    </tr>
+    {% endfor %}
+  </table></div>
+</div>
+{% endblock %}

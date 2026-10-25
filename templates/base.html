@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}{{ APP_TITLE }}{% endblock %} — {{ APP_TITLE }}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}?v={{ VERSION }}">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%231d2430'/%3E%3Cpath d='M3 11h2V7H3zm4 0h2V4H7zm4 0h2V8h-2z' fill='%23fff'/%3E%3C/svg%3E">
+</head>
+<body>
+<div class="layout">
+  <aside class="side">
+    <div class="brand">{{ APP_TITLE }}<small>контроль сервисных ремонтов</small></div>
+    {% set ep = request.endpoint %}
+    <nav class="nav">
+      <a href="{{ url_for('dashboard') }}" class="{{ 'active' if ep == 'dashboard' }}">Главная панель</a>
+      <a href="{{ url_for('sheet') }}" class="{{ 'active' if ep == 'sheet' }}">Лист</a>
+      <a href="{{ url_for('open_repairs') }}" class="{{ 'active' if ep == 'open_repairs' }}">Открытые ремонты</a>
+      <a href="{{ url_for('stuck_page') }}" class="{{ 'active' if ep == 'stuck_page' }}">Где застряли</a>
+      <a href="{{ url_for('models10_page') }}" class="{{ 'active' if ep == 'models10_page' }}">Срок 10 дней</a>
+      <a href="{{ url_for('acts_page') }}" class="{{ 'active' if ep == 'acts_page' }}">Акт утверждён</a>
+      <a href="{{ url_for('repairs') }}" class="{{ 'active' if ep in ('repairs', 'repair') }}">Все ремонты</a>
+      <a href="{{ url_for('contract_page') }}" class="{{ 'active' if ep == 'contract_page' }}">Договорные сроки</a>
+      <a href="{{ url_for('attention') }}" class="{{ 'active' if ep == 'attention' }}">Требуют внимания
+        {% if attention_count %}<span class="count">{{ attention_count|n }}</span>{% endif %}</a>
+      <a href="{{ url_for('analytics_page') }}" class="{{ 'active' if ep == 'analytics_page' }}">Аналитика</a>
+      <a href="{{ url_for('history') }}" class="{{ 'active' if ep == 'history' }}">История изменений</a>
+      <a href="{{ url_for('comments') }}" class="{{ 'active' if ep == 'comments' }}">Комментарии</a>
+      <div class="sep"></div>
+      <a href="{{ url_for('import_page') }}" class="{{ 'active' if ep in ('import_page', 'import_check') }}">Загрузка данных</a>
+      <a href="{{ url_for('settings_page') }}" class="{{ 'active' if ep == 'settings_page' }}">Настройки</a>
+    </nav>
+    <div class="ver">Версия {{ VERSION }} · работает локально</div>
+  </aside>
+  <div class="main">
+    <header class="topbar">
+      <div class="info">
+        {% if latest_import %}
+          <span>Данные на <b>{{ as_of|dt }}</b>
+            {% if stale_days and stale_days > 0 %}<span class="stale" title="Срез выгрузки старше сегодняшнего дня. Обновите выгрузку в Excel и загрузите её.">устарели на {{ stale_days }} дн.</span>{% endif %}
+          </span>
+          <span class="file" title="{{ latest_import.file_path }}">{% if latest_import.file_hash == 'api' %}Источник: портал (API){% else %}Файл: {{ latest_import.file_name }}{% endif %}</span>
+          <span>Загружено {{ latest_import.finished_at|dt }}</span>
+        {% else %}
+          <span>Данные ещё не загружены</span>
+        {% endif %}
+      </div>
+      <div class="spacer"></div>
+      {% if job.running %}
+        <a class="btn" href="{{ url_for('import_page') }}">Идёт загрузка… {{ job.pct|int }}%</a>
+      {% elif source_mode == 'api' %}
+        <form method="post" action="{{ url_for('import_start') }}">
+          <input type="hidden" name="mode" value="api">
+          <button class="btn primary" type="submit" title="Загрузить свежие данные с портала">Обновить данные</button>
+        </form>
+      {% elif source_file %}
+        <form method="post" action="{{ url_for('import_start') }}">
+          <input type="hidden" name="path" value="{{ source_file }}">
+          <button class="btn primary" type="submit" title="Перечитать файл {{ source_file }}">Обновить данные</button>
+        </form>
+      {% else %}
+        <a class="btn primary" href="{{ url_for('import_page') }}">Загрузить выгрузку</a>
+      {% endif %}
+    </header>
+    <main class="content">
+      {% with messages = get_flashed_messages(with_categories=true) %}
+        {% for cat, msg in messages %}<div class="flash {{ cat }}">{{ msg }}</div>{% endfor %}
+      {% endwith %}
+      {% if job.result and job.result.status == 'error' and request.endpoint != 'import_page' %}
+        <div class="flash error">Последняя загрузка завершилась ошибкой: {{ job.result.message }} <a href="{{ url_for('import_page') }}">Подробнее</a></div>
+      {% endif %}
+      {% block content %}{% endblock %}
+    </main>
+  </div>
+</div>
+<script src="{{ url_for('static', filename='app.js') }}?v={{ VERSION }}"></script>
+{% block scripts %}{% endblock %}
+</body>
+</html>

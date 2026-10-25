@@ -1,0 +1,101 @@
+{% extends "base.html" %}
+{% from "macros.html" import filter_bar, pager, cstate with context %}
+{% block title %}Договорные сроки{% endblock %}
+{% block content %}
+{% set w = cs.warranty %}{% set t = cs.tech %}
+<div class="page-head">
+  <div><h1>Договорные сроки СЦ</h1>
+    <p>Основные правила контроля по соглашению с сервисным центром, в рабочих днях. Внутренние предупреждения
+      (простой в статусе и т. п.) показываются отдельно и договорные сроки не подменяют. Ремонтов в выборке: <b>{{ n_items|n }}</b>{% if n_demo %}; демо-ремонты ({{ n_demo|n }}) не считаются{% endif %}. Закрытые («Отчет») не входят.</p></div>
+  <div class="btn-row"><a class="btn" href="{{ url_with(export='xlsx') }}">Выгрузить в Excel</a></div>
+</div>
+
+{% if not cs.enabled %}<div class="note warn">Контроль договорных сроков выключен в настройках.</div>{% endif %}
+<div class="note">
+  <b>Нормативы:</b> диагностика — до {{ cs.diag.days }} р.д.; гарантийное обслуживание — до {{ w.days_no_parts }} р.д. без запчастей
+  и до {{ w.days_parts }} р.д. с запчастями (период поставки исключается); техническая проверка — до {{ t.days }} р.д. до оформления акта.
+  Отсчёт от даты приёма товара СЦ ({{ cs.accept_col }}), {{ 'день приёма считается' if cs.include_start_day else 'со следующего рабочего дня после приёма' }};
+  «Скоро срок» — осталось {{ cs.warn_days }} р.д. или меньше. Календарь — по стране СЦ.
+  {% if w.delivery_is_proxy %}<br><span class="approx" title="Отдельной даты доставки ЗЧ в выгрузке нет">Поступление запчастей определяется по столбцу {{ w.delivery_col }} — это приближение</span>:
+  исключённый период может быть длиннее фактического, поэтому найденное нарушение гарантийного срока — точно нарушение, а часть нарушений может не попасть.{% endif %}
+  <a href="{{ url_for('settings_page', tab='contract') }}">Настроить</a>
+</div>
+
+{% call filter_bar(f, opts, url_for('contract_page')) %}
+  {% if sel_norm %}<input type="hidden" name="norm" value="{{ sel_norm }}">{% endif %}
+  {% for st in sel_states %}<input type="hidden" name="cstate" value="{{ st }}">{% endfor %}
+{% endcall %}
+
+<div class="card tight">
+  <div class="card-head" style="padding:14px 16px 0"><h2>Сводка по нормативам</h2><span class="muted small">число ремонтов; нажмите на число, чтобы открыть список</span></div>
+  <div class="tbl-wrap"><table class="tbl matrix">
+    <tr><th>Норматив</th>{% for st in ['overdue','soon','waiting','in_time','done_late','done_ok','no_data','not_started'] %}<th class="num">{{ CSTATES[st] }}</th>{% endfor %}</tr>
+    {% for n, label in CNORMS %}
+    <tr><td><b>{{ label }}</b></td>
+      {% for st in ['overdue','soon','waiting','in_time','done_late','done_ok','no_data','not_started'] %}
+        {% set v = matrix[n][st] %}
+        <td class="num">{% if v %}<a class="cell cb {{ CSTATE_CLASS[st] }} {{ 'sel' if sel_norm == n and sel_states == [st] }}" href="{{ url_with(norm=n, cstate=[st]) }}">{{ v|n }}</a>{% elif n == 'warranty' or st != 'waiting' %}<span class="muted">0</span>{% else %}<span class="muted">—</span>{% endif %}</td>
+      {% endfor %}
+    </tr>
+    {% endfor %}
+  </table></div>
+</div>
+
+<div class="chips">
+  <span class="muted small">Норматив:</span>
+  <a class="chip-link {{ 'on' if not sel_norm }}" href="{{ url_with(norm=None) }}">Все</a>
+  {% for n, label in CNORMS %}<a class="chip-link {{ 'on' if sel_norm == n }}" href="{{ url_with(norm=n) }}">{{ label }}</a>{% endfor %}
+  <span class="muted small" style="margin-left:10px">Состояния:</span>
+  {% for st, label in CSTATES.items() if st != 'na' %}
+    {% set nl = (sel_states|reject('equalto', st)|list) if st in sel_states else (sel_states + [st]) %}
+    <a class="chip-link {{ 'on' if st in sel_states }}" href="{{ url_with(cstate=nl if nl else ['overdue']) }}">{{ label }}</a>
+  {% endfor %}
+</div>
+
+<div class="card tight">
+  <div class="card-head" style="padding:14px 16px 0"><h2>Ремонты по нормативам</h2><span class="muted small">строк: {{ total|n }}; сначала просроченные с наибольшей просрочкой</span></div>
+  <div class="tbl-wrap"><table class="tbl ctable">
+    <tr><th>ET</th><th>АСЦ</th><th>Статус</th><th>Норматив</th><th>Приём СЦ → контрольная дата</th>
+      <th class="num">Прошло / допустимо, р.д.</th><th class="num">Осталось / просрочка</th><th>Состояние и основание</th></tr>
+    {% for i, c in rows %}
+    <tr>
+      <td><a class="et" href="{{ url_for('repair', et=i.et) }}">{{ i.et }}</a><span class="sub muted small">{{ i.repair_type_final or '' }}</span></td>
+      <td>{{ i.asc or '—' }}<span class="sub muted small">{{ c.calendar }}</span></td>
+      <td>{{ i.status or '—' }}</td>
+      <td>{{ c.label }}{% if c.variant %}<span class="sub muted small">{{ 'с запчастями' if c.variant == 'B' else 'без запчастей' }}</span>{% endif %}</td>
+      <td><span class="nowrap">{{ c.start|d }} → {{ c.control|d if c.control else '…' }}</span><span class="sub muted small">{{ c.control_label or '' }}</span>
+        {% if c.waiting %}<span class="sub small">ждёт ЗЧ с {{ c.waiting.since|d }}: {{ c.waiting.work_days }} р.д. ({{ c.waiting.cal_days }} к.д.)</span>{% endif %}</td>
+      <td class="num">{{ c.elapsed if c.elapsed is not none else '—' }} / {{ c.norm_days or '—' }}
+        {% if c.excluded %}<span class="sub muted small">исключено {{ c.excluded }} р.д.{% if c.approx %} <span class="approx" title="Поступление ЗЧ определено приблизительно">≈</span>{% endif %}</span>{% endif %}</td>
+      <td class="num">{% if c.overdue_by %}<b style="color:var(--high)">+{{ c.overdue_by }}</b>{% elif c.remaining is not none %}{{ c.remaining }}{% else %}—{% endif %}
+        {% if c.deadline and c.state in ('in_time','soon') %}<span class="sub muted small">до {{ c.deadline|d }}</span>{% endif %}</td>
+      <td title="{{ c.basis|join('\n') }}">{{ cstate(c) }}
+        {% if c.missing %}<div class="miss">Нет данных: {{ c.missing|join('; ') }}</div>{% endif %}
+        {% set key_basis = c.basis[1:] %}{# первая строка — тип ремонта, он уже показан под ET #}
+        {% if key_basis %}<div class="basis" style="max-width:300px">{% for b in key_basis[:2] %}<div>{{ b }}</div>{% endfor %}</div>{% endif %}</td>
+    </tr>
+    {% else %}<tr><td colspan="8" class="muted">Нет ремонтов с выбранными состояниями.</td></tr>{% endfor %}
+  </table></div>
+</div>
+{{ pager(page, pages) }}
+
+<div class="card tight" style="margin-top:18px">
+  <div class="card-head" style="padding:14px 16px 0"><h2>Соблюдение по АСЦ</h2>
+    <span class="muted small">завершённые операции: с нарушением / всего; плюс текущие просрочки. Выборки меньше {{ small }} завершённых операций помечены.</span></div>
+  <p class="muted small" style="padding:0 16px">Сравнивайте доли, а не количество: у крупного АСЦ больше операций. Показаны {{ asc_rows|length }} из {{ asc_total }} АСЦ — с наибольшим числом нарушений.</p>
+  <div class="tbl-wrap"><table class="tbl">
+    <tr><th>АСЦ</th><th class="num">Ремонтов</th>
+      {% for n, label in CNORMS %}<th class="num">{{ label }}: нарушено / завершено</th><th class="num">Доля</th><th class="num">Просрочено сейчас</th>{% endfor %}<th></th></tr>
+    {% for d in asc_rows %}
+    <tr><td><a href="{{ link('contract_page', asc=d.asc) }}">{{ d.asc }}</a></td><td class="num">{{ d.n|n }}</td>
+      {% for n, label in CNORMS %}{% set x = d[n] %}
+      <td class="num">{{ x.late }} / {{ x.done }}</td>
+      <td class="num">{{ (x.late / x.done)|pct if x.done else '—' }}</td>
+      <td class="num">{% if x.overdue %}<b style="color:var(--high)">{{ x.overdue }}</b>{% else %}0{% endif %}</td>
+      {% endfor %}
+      <td>{% if d.done_total < small %}<span class="badge neutral">мало данных</span>{% endif %}</td>
+    </tr>
+    {% endfor %}
+  </table></div>
+</div>
+{% endblock %}

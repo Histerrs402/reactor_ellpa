@@ -1,0 +1,76 @@
+{% extends "base.html" %}
+{% from "macros.html" import level_badge, days, presence as presence_badge, sort_th, pager, filter_bar with context %}
+{% block title %}Требуют внимания{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div><h1>Требуют внимания</h1>
+    <p>{{ total|n }} ремонтов с предупреждениями. Сначала — самые срочные: критичность = сумма баллов
+      (дни сверх порога, дни просрочки, дни после исчезновения, проблемы с датами). Веса настраиваются.</p></div>
+  <div class="btn-row"><a class="btn" href="{{ link('repairs', problem='1', presence='all', export='xlsx') }}">Выгрузить в Excel</a></div>
+</div>
+
+<nav class="tabs">
+  <a href="{{ url_with(group=None) }}" class="{{ 'active' if not group }}">Все ({{ groups[''] }})</a>
+  <a href="{{ url_with(group='contract') }}" class="{{ 'active' if group == 'contract' }}">Договорные сроки ({{ groups['contract'] }})</a>
+  <a href="{{ url_with(group='internal') }}" class="{{ 'active' if group == 'internal' }}">Внутренние предупреждения ({{ groups['internal'] }})</a>
+</nav>
+<div class="kpis" style="grid-template-columns: repeat(auto-fill, minmax(160px, 1fr))">
+  {% for k, l in REASONS.items() %}
+  <a class="kpi" href="{{ url_with(reason=(None if f.reason and k in f.reason else k)) }}" style="{{ 'border-color:var(--accent)' if f.reason and k in f.reason }}">
+    <div class="label">{{ l }}</div><div class="value" style="font-size:22px">{{ counts[k]|n }}</div></a>
+  {% endfor %}
+</div>
+
+{% call filter_bar(f, opts, url_for('attention')) %}
+  {% if group %}<input type="hidden" name="group" value="{{ group }}">{% endif %}
+  <label class="field"><span>Причина</span>
+    <select name="reason"><option value="">Любая</option>
+      {% for k, l in REASONS.items() %}<option value="{{ k }}" {{ 'selected' if f.reason and k in f.reason }}>{{ l }}</option>{% endfor %}
+    </select></label>
+  <label class="field"><span>Критичность</span>
+    <select name="level"><option value="">Любая</option>
+      {% for k, l in LEVELS.items() %}<option value="{{ k }}" {{ 'selected' if f.level and k in f.level }}>{{ l }} ({{ levels[k] }})</option>{% endfor %}
+    </select></label>
+{% endcall %}
+
+<div class="card tight">
+<div class="tbl-wrap">
+<table class="tbl">
+  <tr>
+    {{ sort_th('Критичность', 'score', sort, desc) }}
+    {{ sort_th('ET', 'et', sort, desc) }}
+    {{ sort_th('Статус', 'status', sort, desc) }}
+    {{ sort_th('АСЦ', 'asc', sort, desc) }}
+    {{ sort_th('Дней в статусе', 'days', sort, desc, 'num') }}
+    {{ sort_th('Возраст', 'age', sort, desc, 'num') }}
+    <th>Причины и последние события</th>
+    {{ sort_th('Комментарий', 'comment', sort, desc) }}
+  </tr>
+  {% for i in items %}
+  <tr class="lv-{{ i.level }} {{ 'has-cm' if i.last_comment }}">
+    <td>{{ level_badge(i) }}</td>
+    <td class="et"><a href="{{ url_for('repair', et=i.et) }}">{{ i.et }}</a>{% if not i.current %}<span class="sub">{{ presence_badge(i) }}</span>{% endif %}<span class="sub muted small">{{ i.model or '' }}</span></td>
+    <td>{{ i.status or '—' }}</td>
+    <td>{{ i.asc or '—' }}</td>
+    <td class="num">{{ days(i) }}{% if i.stuck_threshold is not none and i.present %}<span class="muted small"> / {{ i.stuck_threshold }}</span>{% endif %}</td>
+    <td class="num">{{ i.age_days if i.age_days is not none else '—' }}{% if i.overdue %}<br><span class="small" style="color:var(--high)">+{{ i.overdue_days }}</span>{% endif %}</td>
+    <td class="reasons">{% for r in i.reasons %}<span class="reason">{{ r.text }}</span>{% endfor %}
+      {% if i.disappeared and i.closure_status in (none, 'unconfirmed') %}
+      <form method="post" action="{{ url_for('repair_resolve', et=i.et) }}" class="btn-row" style="margin-top:4px;flex-wrap:nowrap">
+        <input type="hidden" name="action" value="resolve"><input type="hidden" name="back" value="{{ request.full_path }}">
+        <input type="hidden" name="author" value="{{ author }}">
+        <input type="text" name="note" placeholder="Что выяснили" style="width:130px">
+        <button class="btn small" type="submit">Проверено</button></form>
+      {% endif %}
+      <div class="events">{% for e in hist.get(i.et, [])[:3] %}<div><span class="muted">{{ e.detected_at|d }}</span> {{ EVENT_LABELS.get(e.event_type, e.event_type) }}{% if e.event_type == 'status_changed' %}: {{ e.old_value }} → {{ e.new_value }}{% endif %}</div>{% else %}<span class="muted">изменений между загрузками не обнаружено</span>{% endfor %}</div></td>
+
+    <td class="comment">{% if i.last_comment %}<div class="clip" title="{{ i.last_comment.text }}">{{ i.last_comment.text }}</div><span class="tag-src">{{ i.last_comment.created_at|d }}</span>{% else %}<a class="small" href="{{ url_for('repair', et=i.et) }}#comments">добавить</a>{% endif %}</td>
+  </tr>
+  {% else %}
+  <tr><td colspan="8" class="muted">Нет ремонтов, требующих внимания, по выбранным фильтрам.</td></tr>
+  {% endfor %}
+</table>
+</div>
+</div>
+{{ pager(page, pages) }}
+{% endblock %}

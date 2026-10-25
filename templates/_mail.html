@@ -1,0 +1,27 @@
+{# Письмо в АСЦ: msg = {subject, body, to, cc, sep, contacts, asc_status, mailto} #}
+<div class="mail" data-sep="{{ msg.sep or ';' }}">
+  {% if msg.asc_status and msg.asc_status != 'Активная' %}<div class="note warn small">Статус контрагента в справочнике: «{{ msg.asc_status }}».</div>{% endif %}
+  <label class="field"><span>Кому</span>
+    <div class="copyrow"><input type="text" class="mail-to" value="{{ (msg.to or [])|join((msg.sep or ';') ~ ' ') }}" placeholder="{{ 'адреса не найдены — впишите или выберите ниже' if msg.contacts else 'контактов этого АСЦ нет в справочнике' }}">
+      <button class="btn small" type="button" data-copy="to">Скопировать</button></div></label>
+  <label class="field"><span>Копия</span>
+    <input type="text" class="mail-cc" value="{{ (msg.cc or [])|join((msg.sep or ';') ~ ' ') }}" placeholder="—"></label>
+  {% if msg.contacts %}
+  <details class="contacts"><summary class="small">Контакты АСЦ ({{ msg.contacts|length }}) — нажмите на адрес, чтобы добавить в «Кому» или убрать</summary>
+    <div class="clist">{% for c in msg.contacts if c.email %}<button type="button" class="chip-mail" data-email="{{ c.email }}" title="{{ c.position or '' }}{% if c.phone %} · тел. {{ c.phone }}{% endif %}">{{ c.person or '—' }} · <span class="muted">{{ c.role or 'без роли' }}</span> · {{ c.email }}</button>{% endfor %}</div>
+  </details>
+  {% endif %}
+  <label class="field"><span>Тема</span>
+    <div class="copyrow"><input type="text" value="{{ msg.subject }}" class="mail-subj" spellcheck="true"><button class="btn small" type="button" data-copy="subj">Скопировать</button></div></label>
+  <label class="field"><span>Текст <span class="muted small">— тему и текст можно поправить прямо здесь; копируется и открывается в почте уже исправленный вариант</span></span>
+    <textarea rows="12" spellcheck="true" class="mail-body">{{ msg.body }}</textarea></label>
+  <div class="btn-row" style="margin-top:6px">
+    <button class="btn primary small" type="button" data-copy="body">Скопировать текст</button>
+    {% if msg.web_base %}<a class="btn small" href="{{ msg.mailto }}" data-mailto data-web="{{ msg.web_base }}" target="_blank" rel="noopener" title="Новое письмо в почте в браузере (новая вкладка) с адресами, темой и текстом">Открыть в Яндекс Почте</a>
+    {% else %}<a class="btn small" href="{{ msg.mailto }}" data-mailto title="Новое письмо в почтовой программе с адресами, темой и текстом">Открыть в почте</a>{% endif %}
+    <button class="btn small" type="button" data-reset hidden title="Вернуть тему и текст, которые составила программа">Вернуть исходный текст</button>
+    <span class="small muted copy-msg"></span>
+  </div>
+  <p class="small muted" style="margin:6px 0 0">Письмо открывается {{ 'в Яндекс Почте в браузере' if msg.web_base else 'в почтовой программе на компьютере (Outlook)' }} ·
+    <a href="{{ url_for('settings_page', tab='contacts') }}">изменить</a></p>
+</div>

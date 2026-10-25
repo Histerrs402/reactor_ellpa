@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+{% from "macros.html" import days, status_date, sort_th, filter_bar, demo_badge, trk with context %}
+{% block title %}Открытые ремонты{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div><h1>Открытые ремонты</h1>
+    <p>Все ремонты в работе. Закрытые (статус «Отчет»{% if n_closed %}, сейчас {{ n_closed|n }}{% endif %}) исключаются автоматически.
+      Дни — календарные, на момент данных {{ as_of|dt }}.</p></div>
+  <div class="btn-row"><a class="btn" href="{{ url_with(export='xlsx') }}">Выгрузить в Excel</a></div>
+</div>
+
+{% call filter_bar(f, opts, url_for('open_repairs')) %}
+  {% if extra.st %}<input type="hidden" name="st" value="{{ extra.st }}">{% endif %}
+  <label class="field"><span>Город</span>
+    <select name="city" style="max-width:200px"><option value="">Все</option>
+      {% for c in cities %}<option value="{{ c }}" {{ 'selected' if extra.city and c in extra.city }}>{{ c }}</option>{% endfor %}
+    </select></label>
+  <label class="field"><span>Дней в статусе от</span><input type="number" min="0" name="days_from" value="{{ extra.days_from if extra.days_from is not none else '' }}"></label>
+  <label class="field"><span>до</span><input type="number" min="0" name="days_to" value="{{ extra.days_to if extra.days_to is not none else '' }}"></label>
+  <label class="field"><span>Приём техники</span>
+    <select name="accepted">
+      <option value="">Все</option>
+      <option value="yes" {{ 'selected' if extra.accepted == 'yes' }}>Принята АСЦ</option>
+      <option value="no" {{ 'selected' if extra.accepted == 'no' }}>Не принята</option>
+    </select></label>
+{% endcall %}
+
+<div class="card tight">
+  <div class="card-head" style="padding:14px 16px 0"><h2>Сводка по статусам</h2>
+    <span class="muted small">{{ n_base|n }} ремонтов с учётом фильтров; нажмите на статус, чтобы показать только его</span></div>
+  <div class="tbl-wrap"><table class="tbl sumtab">
+    <tr><th>Статус</th><th class="num">Ремонтов</th><th style="width:28%">Доля</th><th class="num">Среднее время в статусе, дн.</th><th class="num">Максимум, дн.</th><th>Самый долгий</th></tr>
+    {% for r in summary %}
+    <tr class="{{ 'sel' if extra.st == r.status }}">
+      <td><a href="{{ url_with(st=r.status, page=None) }}"><b>{{ r.status }}</b></a></td>
+      <td class="num">{{ r.n|n }}</td>
+      <td><div class="sbar"><span style="width:{{ (r.share * 100)|round(1) }}%"></span></div><span class="muted small">{{ r.share|pct }}</span></td>
+      <td class="num">{{ r.avg|f1 if r.avg is not none else '—' }}</td>
+      <td class="num">{% if r.max is not none %}{{ '≥ ' if r.max_lb }}{{ r.max }}{% else %}—{% endif %}</td>
+      <td>{% if r.max_et %}<a class="et" href="{{ url_for('repair', et=r.max_et) }}">{{ r.max_et }}</a>{% endif %}
+        {% if r.lower_bound %}<span class="muted small" title="У этих ремонтов в выгрузке нет даты входа в статус: дни считаются от первого обнаружения программой и могут быть больше"> · ≥ у {{ r.lower_bound }}</span>{% endif %}</td>
+    </tr>
+    {% endfor %}
+    <tr class="total"><td><b>Всего</b></td><td class="num"><b>{{ n_base|n }}</b></td><td></td>
+      <td class="num">{{ avg_all|f1 if avg_all is not none and not extra.st else '' }}</td><td class="num">{{ max_all if max_all is not none and not extra.st else '' }}</td><td></td></tr>
+  </table></div>
+  <p class="muted small" style="padding:0 16px 10px">Время в статусе — от даты входа в текущий статус (столбцы «…ОнЛайн» выгрузки) до момента данных.
+    Если такой даты нет, считается от первого обнаружения статуса программой и помечается «≥» — реальное время может быть больше.</p>
+</div>
+
+{% if extra.st %}<div class="chips"><span class="muted small">Показан статус:</span> <a class="chip-link on" href="{{ url_with(st=None) }}">{{ extra.st }} ✕</a></div>{% endif %}
+
+<div class="card tight">
+  <div class="card-head" style="padding:14px 16px 0"><h2>Ремонты</h2><span class="muted small">строк: {{ total|n }}</span></div>
+  <div class="tbl-wrap"><table class="tbl opentab">
+    <tr>
+      {{ sort_th('ET', 'et', sort, desc) }}
+      {{ sort_th('Дата создания заявки', 'created', sort, desc) }}
+      {{ sort_th('Статус', 'status', sort, desc) }}
+      {{ sort_th('Дата перехода в статус', 'since', sort, desc) }}
+      {{ sort_th('Дней в статусе', 'days', sort, desc, 'num') }}
+      {{ sort_th('АСЦ', 'asc', sort, desc) }}
+      {{ sort_th('Город', 'city', sort, desc) }}
+      {{ sort_th('Дата приёма техники', 'accepted', sort, desc) }}
+      {{ sort_th('Тип ремонта', 'rtype', sort, desc) }}
+      {{ sort_th('Последний комментарий', 'comment', sort, desc) }}
+    </tr>
+    {% for i in items %}
+    <tr class="{{ 'lv-' ~ i.level if i.level }} {{ 'has-cm' if i.last_comment }}">
+      <td class="nowrap"><a class="et" href="{{ url_for('repair', et=i.et) }}">{{ i.et }}</a> {{ trk(i) }} {{ demo_badge(i) }}</td>
+      <td class="nowrap" title="{{ i.created_at|dt }}">{{ i.created_at|d }}</td>
+      <td>{{ i.status or '—' }}</td>
+      <td class="nowrap">{% if i.status_date %}<span title="{{ i.status_date|dt }}">{{ i.status_date|d }}</span>{% elif i.status_seen_since %}<span class="muted" title="Даты статуса нет в выгрузке; показан момент первого обнаружения программой">обнар. {{ i.status_seen_since|d }}</span>{% else %}<span class="muted">—</span>{% endif %}</td>
+      <td class="num">{{ days(i) }}</td>
+      <td>{{ i.asc or '—' }}</td>
+      <td>{{ i.city or '—' }}{% if i.country and i.country != 'РОССИЯ' %}<span class="sub muted small">{{ i.country }}</span>{% endif %}</td>
+      <td class="nowrap">{{ i.accepted_at|d if i.accepted_at else '' }}{% if not i.accepted_at %}<span class="muted small">не принята</span>{% endif %}</td>
+      <td class="small">{{ i.repair_type_final or '(пусто)' }}</td>
+      <td class="comment">{% if i.last_comment %}<div class="clip" title="{{ i.last_comment.text }}">{{ i.last_comment.text }}</div><span class="tag-src">{{ i.last_comment.created_at|d }}</span>{% else %}<span class="muted">—</span>{% endif %}</td>
+    </tr>
+    {% else %}
+    <tr><td colspan="10" class="muted">Ничего не найдено. Измените фильтры.</td></tr>
+    {% endfor %}
+  </table></div>
+</div>
+{% endblock %}

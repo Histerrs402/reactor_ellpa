@@ -1,0 +1,491 @@
+{% extends "base.html" %}
+{% block title %}Настройки{% endblock %}
+{% macro col_select(name, value, headers, empty='— не использовать —') -%}
+  <select name="{{ name }}">
+    <option value="">{{ empty }}</option>
+    {% for h in headers %}<option value="{{ h }}" {{ 'selected' if h == value }}>{{ h }}</option>{% endfor %}
+    {% if value and value not in headers %}<option value="{{ value }}" selected>{{ value }} (нет в последнем файле)</option>{% endif %}
+  </select>
+{%- endmacro %}
+{% block content %}
+<div class="page-head">
+  <div><h1>Настройки</h1>
+    <p>Все изменения сохраняются в базе программы и сразу применяются к расчётам. Исходный Excel не изменяется.</p></div>
+</div>
+{% set tabs = [('source','Источник данных'),('sheet','Лист'),('contacts','Контакты АСЦ'),('contract','Договорные сроки'),('calendars','Календари'),('mapping','Столбцы'),('statuses','Статусы'),('stuck','Простой'),('overdue','Срок ремонта'),('checks','Проверки дат'),('rules','Свои правила'),('weights','Критичность'),('history','История и данные'),('general','Общие и резервные копии')] %}
+<nav class="tabs">{% for k, l in tabs %}<a href="{{ url_for('settings_page', tab=k) }}" class="{{ 'active' if tab == k }}">{{ l }}</a>{% endfor %}</nav>
+{% set headers = k.headers or s.mapping.values()|select|list %}
+
+{% if tab == 'source' %}
+{% set api = s.api %}
+<form class="card" method="post" action="{{ url_for('settings_save', section='api') }}" autocomplete="off">
+  <h2>Откуда брать данные</h2>
+  <div class="btn-row">
+    <label class="check"><input type="radio" name="source_mode" value="api" {{ 'checked' if s.source_mode == 'api' }}> <b>С портала (API)</b> — напрямую, без Excel</label>
+    <label class="check"><input type="radio" name="source_mode" value="excel" {{ 'checked' if s.source_mode != 'api' }}> Из файла Excel (OData_open_repairs)</label>
+  </div>
+  <p class="muted small">От этого зависит, что делает кнопка «Обновить данные» вверху страницы. Загрузить из другого источника можно в разделе «Загрузка данных».</p>
+
+  <h3>Портал (OData) — как запросы Power Query в вашей книге</h3>
+  <label class="field"><span>Адрес сервиса</span><input type="text" name="base_url" value="{{ api.base_url }}" style="width:100%"></label>
+  <div class="btn-row" style="align-items:flex-end;margin-top:8px">
+    <label class="field"><span>Вход</span>
+      <select name="auth" id="auth-sel">{% for kk, ll in AUTH_LABELS.items() %}<option value="{{ kk }}" {{ 'selected' if api.auth == kk }}>{{ ll }}</option>{% endfor %}</select></label>
+    <label class="field auth-basic"><span>Логин (как на портале)</span><input type="text" name="login" value="{{ api.login }}" autocomplete="off"></label>
+    <label class="field auth-basic"><span>Пароль</span><input type="password" name="password" value="" autocomplete="new-password" style="width:270px"
+      placeholder="{{ 'сохранён — введите, чтобы заменить' if api.password else 'не задан' }}"></label>
+    {% if api.password %}<label class="check auth-basic"><input type="checkbox" name="clear_password" value="1"> удалить пароль</label>{% endif %}
+    <label class="field auth-token"><span>Заголовок для ключа</span><input type="text" name="token_header" value="{{ api.token_header }}"></label>
+    <label class="field auth-token auth-bearer"><span>Ключ (токен)</span><input type="password" name="token" value="" autocomplete="new-password" style="width:270px"
+      placeholder="{{ 'сохранён — введите, чтобы заменить' if api.token else 'не задан' }}"></label>
+  </div>
+  <p class="muted small">Пароль и ключ хранятся только на этом компьютере в зашифрованном виде (средствами Windows, под вашей учётной записью)
+    и на странице не показываются. {% if api.password and not pw_protected %}<b>Сейчас пароль не зашифрован</b> (шифрование Windows недоступно) — он лишь закодирован.{% endif %}</p>
+
+  <h3>Запросы</h3>
+  <p class="muted small">Каждый запрос — как лист книги: те же фильтры $filter, что в Power Query. Название запроса = название листа
+    (по нему программа ведёт историю, поэтому при переходе с Excel на портал история продолжается). В поле фильтра можно вставить и полный адрес из Power Query.</p>
+  <table class="tbl" style="width:100%">
+    <tr><th style="width:170px">Название (лист)</th><th style="width:80px">Загружать</th><th>Фильтр ($filter)</th></tr>
+    {% for src in api.sources %}
+    <tr><td><input type="text" name="src_name_{{ loop.index0 }}" value="{{ src.name }}" style="width:160px"></td>
+      <td><input type="checkbox" name="src_on_{{ loop.index0 }}" value="1" {{ 'checked' if src.enabled }}></td>
+      <td><textarea name="src_filter_{{ loop.index0 }}" rows="2" style="width:100%;font-family:ui-monospace,Consolas,monospace;font-size:12px">{{ src.filter }}</textarea></td></tr>
+    {% endfor %}
+    <tr><td><input type="text" name="src_name_{{ api.sources|length }}" placeholder="новый запрос" style="width:160px"></td>
+      <td><input type="checkbox" name="src_on_{{ api.sources|length }}" value="1" checked></td>
+      <td><textarea name="src_filter_{{ api.sources|length }}" rows="2" style="width:100%;font-family:ui-monospace,Consolas,monospace;font-size:12px"></textarea></td></tr>
+  </table>
+  <input type="hidden" name="n_src" value="{{ api.sources|length }}">
+
+  <div class="btn-row" style="align-items:flex-end;margin-top:10px">
+    <label class="check"><input type="checkbox" name="check_closures" value="1" {{ 'checked' if api.check_closures }}> исчезнувшие ремонты проверять на портале (есть ли акт, какой статус)</label>
+  </div>
+  <div class="btn-row" style="align-items:flex-end;margin-top:6px">
+    <label class="field"><span>Ждать ответа, с</span><input type="number" min="10" max="1800" name="timeout" value="{{ api.timeout }}"></label>
+    <label class="field"><span>Поправка времени, ч</span><input type="text" name="time_shift_hours" value="{{ api.time_shift_hours }}" style="width:80px"></label>
+    <label class="check"><input type="checkbox" name="verify_ssl" value="1" {{ 'checked' if api.verify_ssl }}> проверять сертификат портала</label>
+  </div>
+  <p class="muted small">Поправку времени менять не нужно, если программа сама об этом не попросит. Проверку сертификата отключайте только если
+    в компании свой сертификат и программа сообщает об ошибке сертификата.</p>
+  <div class="btn-row" style="margin-top:10px"><button class="btn primary" type="submit">Сохранить</button>
+    <a class="btn" href="{{ url_for('import_page') }}">Проверить подключение →</a></div>
+</form>
+<script>
+(function(){var s=document.getElementById('auth-sel');if(!s)return;function u(){var v=s.value;
+document.querySelectorAll('.auth-basic').forEach(function(e){e.style.display=v==='basic'?'':'none'});
+document.querySelectorAll('.auth-token').forEach(function(e){e.style.display=(v==='header')?'':'none'});
+document.querySelectorAll('.auth-bearer').forEach(function(e){if(v==='bearer')e.style.display=''});}
+s.addEventListener('change',u);u();})();
+</script>
+
+<form class="card" method="post" action="{{ url_for('settings_save', section='source') }}">
+  <h2>Файл Excel</h2>
+  <label class="field"><span>Файл выгрузки по умолчанию (для кнопки «Обновить данные»)</span>
+    <input type="text" name="source_file" value="{{ s.source_file }}" style="width:100%"></label>
+  {% if k.sheets %}
+  <h3>Листы с ремонтами</h3>
+  <p class="muted small">Из файла {{ k.wb_file }}. ET в разных листах не пересекаются; исчезновение ремонта отслеживается только внутри загружаемых листов.</p>
+  {% for sh in k.sheets %}{% if sh.is_repairs %}
+    <label class="check" style="display:flex"><input type="checkbox" name="sheets" value="{{ sh.name }}" {{ 'checked' if sh.name in s.sheets }}> {{ sh.name }} <span class="muted small">≈{{ sh.rows|n }} строк{% if sh.state != 'visible' %}, скрытый{% endif %}</span></label>
+  {% endif %}{% endfor %}
+  {% else %}
+  <label class="field"><span>Листы с ремонтами (через ;)</span><input type="text" name="sheets_text" value="{{ s.sheets|join(';') }}"></label>
+  <p class="muted small">Список листов появится после проверки или загрузки файла.</p>
+  {% endif %}
+  {% set names = k.sheets|map(attribute='name')|list %}
+  <div class="grid2" style="margin-top:10px">
+    <label class="field"><span>Лист комментариев (Repair / Comment)</span>
+      <select name="comments_sheet"><option value="">— не загружать —</option>
+        {% for n in names %}<option value="{{ n }}" {{ 'selected' if n == s.comments_sheet }}>{{ n }}</option>{% endfor %}
+        {% if s.comments_sheet and s.comments_sheet not in names %}<option selected value="{{ s.comments_sheet }}">{{ s.comments_sheet }}</option>{% endif %}
+      </select></label>
+    <label class="field"><span>Лист актов для подтверждения закрытия</span>
+      <select name="closure_sheet"><option value="">— не использовать —</option>
+        {% for n in names %}<option value="{{ n }}" {{ 'selected' if n == s.closure_sheet }}>{{ n }}</option>{% endfor %}
+        {% if s.closure_sheet and s.closure_sheet not in names %}<option selected value="{{ s.closure_sheet }}">{{ s.closure_sheet }}</option>{% endif %}
+      </select></label>
+  </div>
+  <p class="muted small">Если ремонт пропал из выгрузки и найден в листе актов — он считается закрытым актом. Иначе остаётся «исчез, не подтверждён» до проверки.
+    Лист актов большой (десятки тысяч строк), поэтому он читается только когда есть исчезнувшие ремонты.</p>
+  <button class="btn primary" type="submit">Сохранить</button>
+</form>
+
+{% elif tab == 'sheet' %}
+<form class="card" method="post" action="{{ url_for('settings_save', section='sheet') }}">
+  <h2>Столбцы раздела «Лист»</h2>
+  <p class="muted small">По одному названию столбца выгрузки в строке, в нужном порядке. Столбец «комментарий» добавляется в конце всегда.
+    По умолчанию — как в вашем листе DL_GR_open_reps.</p>
+  <textarea name="sheet_columns" rows="14" style="width:420px;font-family:ui-monospace,Consolas,monospace">{{ s.sheet_columns|join('\n') }}</textarea>
+  {% set unknown = s.sheet_columns|reject('in', headers)|list %}
+  {% if headers and unknown %}<div class="note warn">Нет в последней выгрузке: {{ unknown|join(', ') }}.</div>{% endif %}
+  <details style="margin-top:8px"><summary class="small">Все столбцы последней выгрузки ({{ headers|length }})</summary>
+    <p class="small muted" style="columns:3">{% for h in headers %}{{ h }}<br>{% endfor %}</p></details>
+  <p style="margin-top:10px"><button class="btn primary" type="submit">Сохранить</button></p>
+</form>
+
+{% elif tab == 'contract' %}
+{% set cs = s.contract %}{% set w = cs.warranty %}{% set t = cs.tech %}{% set dg = cs.diag %}
+<form class="card" method="post" action="{{ url_for('settings_save', section='contract') }}">
+  <h2>Договорные сроки СЦ</h2>
+  <p class="muted small">Основные правила контроля по соглашению с СЦ. Сроки — в рабочих днях по календарю страны СЦ (вкладка «Календари»).
+    Внутренние предупреждения (простой, общий срок) настраиваются отдельно и договорные сроки не подменяют.</p>
+  <label class="check" style="display:flex;margin-bottom:8px"><input type="checkbox" name="enabled" value="1" {{ 'checked' if cs.enabled }}> контроль договорных сроков включён</label>
+
+  <h3>Общие правила</h3>
+  <div class="btn-row" style="align-items:flex-end">
+    <label class="field"><span>Дата приёма товара СЦ (начало отсчёта)</span>{{ col_select('accept_col', cs.accept_col, headers, '— не задано —') }}</label>
+    <label class="field"><span>Поле страны СЦ (для календаря)</span>{{ col_select('country_col', cs.country_col, headers, '— не задано —') }}</label>
+    <label class="field"><span>«Скоро срок», если осталось р.д. не больше</span><input type="number" min="0" name="warn_days" value="{{ cs.warn_days }}"></label>
+  </div>
+  <label class="check" style="display:flex;margin:6px 0"><input type="checkbox" name="include_start_day" value="1" {{ 'checked' if cs.include_start_day }}> считать день приёма товара рабочим днём срока (по умолчанию нет: срок начинается на следующий день — ст. 191 ГК РФ)</label>
+  <p class="muted small">Контрольный день (заказ ЗЧ, завершение, акт) всегда входит в срок.</p>
+
+  <h3>Типы ремонта под договорным контролем</h3>
+  <label class="field" style="max-width:520px"><span>Поля типа ремонта (через «;», берётся первое непустое)</span><input type="text" name="type_cols" value="{{ cs.type_cols|join('; ') }}"></label>
+  <div style="margin-top:6px">{% for v in k.type_vals %}<label class="check" style="display:inline-flex;width:300px;margin:3px 0"><input type="checkbox" name="types" value="{{ v }}" {{ 'checked' if v in cs.types }}> {{ v }}</label>{% endfor %}</div>
+  <h3>Статусы «товар ещё не принят» (отсчёт не начат)</h3>
+  <div>{% for st in k.statuses %}<label class="check" style="display:inline-flex;width:230px;margin:3px 0"><input type="checkbox" name="pre_accept" value="{{ st }}" {{ 'checked' if st in cs.pre_accept_statuses }}> {{ st }}</label>{% endfor %}</div>
+
+  <h3>1. Диагностика / проверка качества</h3>
+  <div class="btn-row">
+    <label class="check"><input type="checkbox" name="diag_enabled" value="1" {{ 'checked' if dg.enabled }}> контролировать</label>
+    <label class="field"><span>Норматив, р.д.</span><input type="number" min="1" name="diag_days" value="{{ dg.days }}"></label>
+  </div>
+  <p class="muted small">Окончание диагностики — самая ранняя из отмеченных дат (заказ ЗЧ на интернет-странице входит в контролируемую операцию):</p>
+  <div>{% for c in (k.date_headers + dg.end_cols)|unique %}<label class="check" style="display:inline-flex;width:300px;margin:3px 0"><input type="checkbox" name="diag_end_cols" value="{{ c }}" {{ 'checked' if c in dg.end_cols }}> {{ c }}</label>{% endfor %}</div>
+
+  <h3>2. Гарантийное обслуживание</h3>
+  <div class="btn-row" style="align-items:flex-end">
+    <label class="check"><input type="checkbox" name="w_enabled" value="1" {{ 'checked' if w.enabled }}> контролировать</label>
+    <label class="field"><span>Без ЗЧ, р.д.</span><input type="number" min="1" name="w_days_no_parts" value="{{ w.days_no_parts }}"></label>
+    <label class="field"><span>С ЗЧ, р.д.</span><input type="number" min="1" name="w_days_parts" value="{{ w.days_parts }}"></label>
+  </div>
+  <div class="btn-row" style="align-items:flex-end;margin-top:8px">
+    <label class="field"><span>Завершение работ</span>{{ col_select('w_end_col', w.end_col, headers, '— не задано —') }}</label>
+    <label class="field"><span>Заказ ЗЧ</span>{{ col_select('w_order_col', w.order_col, headers, '— не задано —') }}</label>
+    <label class="field"><span>Поступление ЗЧ в СЦ</span>{{ col_select('w_delivery_col', w.delivery_col, headers, '— нет в выгрузке —') }}</label>
+    <label class="field"><span>Сумма ЗЧ</span>{{ col_select('w_parts_sum_col', w.parts_sum_col, headers, '— не задано —') }}</label>
+  </div>
+  <label class="check" style="display:flex;margin:6px 0"><input type="checkbox" name="w_delivery_is_proxy" value="1" {{ 'checked' if w.delivery_is_proxy }}> столбец поступления ЗЧ — приближение (в выгрузке нет точной даты доставки; помечать расчёт как приблизительный)</label>
+  <p class="muted small">Ожидание ЗЧ исключается: рабочие дни строго между заказом и поступлением. Изменить:</p>
+  <label class="check" style="display:flex;margin:3px 0"><input type="checkbox" name="exclude_order_day" value="1" {{ 'checked' if cs.exclude_order_day }}> исключать и день заказа ЗЧ</label>
+  <label class="check" style="display:flex;margin:3px 0"><input type="checkbox" name="exclude_delivery_day" value="1" {{ 'checked' if cs.exclude_delivery_day }}> исключать и день поступления ЗЧ</label>
+  <p class="muted small" style="margin-top:8px">Признаки использования ЗЧ: дата заказа ЗЧ, сумма ЗЧ больше нуля или заполненный номер детали в столбцах:</p>
+  <div>{% for c in (k.part_headers + w.parts_cols)|unique %}<label class="check" style="display:inline-flex;width:230px;margin:3px 0"><input type="checkbox" name="w_parts_cols" value="{{ c }}" {{ 'checked' if c in w.parts_cols }}> {{ c }}</label>{% endfor %}</div>
+  <p class="muted small">Если ремонт не завершён и признаков нет — вариант норматива не выбирается («Недостаточно данных»), пока не прошло больше {{ [w.days_no_parts, w.days_parts]|max }} р.д.</p>
+  <p class="muted small">Статусы ожидания запчастей (отсчёт приостановлен):</p>
+  <div>{% for st in k.statuses %}<label class="check" style="display:inline-flex;width:230px;margin:3px 0"><input type="checkbox" name="w_waiting" value="{{ st }}" {{ 'checked' if st in w.waiting_statuses }}> {{ st }}</label>{% endfor %}</div>
+  <label class="check" style="display:flex;margin:6px 0"><input type="checkbox" name="w_skip_if_tech" value="1" {{ 'checked' if w.skip_if_tech }}> не применять гарантийный норматив к ремонтам, прошедшим техническую проверку с актом</label>
+
+  <h3>3. Техническая проверка</h3>
+  <div class="btn-row" style="align-items:flex-end">
+    <label class="check"><input type="checkbox" name="t_enabled" value="1" {{ 'checked' if t.enabled }}> контролировать</label>
+    <label class="field"><span>Норматив, р.д.</span><input type="number" min="1" name="t_days" value="{{ t.days }}"></label>
+    <label class="field"><span>Дата оформления акта</span>{{ col_select('t_act_col', t.act_col, headers, '— не задано —') }}</label>
+    <label class="field"><span>Номер акта</span>{{ col_select('t_act_number_col', t.act_number_col, headers, '— не задано —') }}</label>
+    <label class="field"><span>Причина акта</span>{{ col_select('t_reason_col', t.reason_col, headers, '— не задано —') }}</label>
+  </div>
+  <p class="muted small">Дата акта не подменяется датой завершения ремонта, сменой статуса или датой загрузки. Причины актов, которые <b>не</b> считаются технической проверкой:</p>
+  <div>{% for r in k.act_reasons %}<label class="check" style="display:inline-flex;width:330px;margin:3px 0"><input type="checkbox" name="t_exclude" value="{{ r }}" {{ 'checked' if r in t.exclude_reasons }}> {{ r }}</label>{% endfor %}</div>
+  <p class="muted small" style="margin-top:8px">Необязательно: вести срок техпроверки ещё до оформления акта для ремонтов, где поле равно одному из значений (через «;»):</p>
+  <div class="btn-row">
+    <label class="field"><span>Поле</span>{{ col_select('t_pending_field', t.pending_field, headers, '— не использовать —') }}</label>
+    <label class="field"><span>Значения</span><input type="text" name="t_pending_values" value="{{ t.pending_values|join('; ') }}" placeholder="например: Обмен"></label>
+  </div>
+
+  <h3>«Требуют внимания»</h3>
+  <p class="muted small">Просроченные договорные сроки и «скоро срок» показываются всегда. Дополнительно показывать:</p>
+  <label class="check" style="display:flex;margin:3px 0"><input type="checkbox" name="attention_done_late" value="1" {{ 'checked' if cs.attention_done_late }}> завершённые с нарушением</label>
+  <label class="check" style="display:flex;margin:3px 0"><input type="checkbox" name="attention_no_data" value="1" {{ 'checked' if cs.attention_no_data }}> с недостаточными данными</label>
+  <p style="margin-top:12px"><button class="btn primary" type="submit">Сохранить</button></p>
+</form>
+
+{% elif tab == 'calendars' %}
+<form class="card" method="post" action="{{ url_for('settings_save', section='calendars') }}">
+  <h2>Производственные календари</h2>
+  <p class="muted small">Рабочий день = понедельник–пятница, кроме нерабочих праздничных и перенесённых дней; плюс рабочие субботы/воскресенья по переносам.
+    Праздники, выпавшие на выходные, указывать не нужно. Даты — по одной в строке (дд.мм.гггг), после даты можно написать комментарий.
+    Для лет, не указанных в поле «Годы», учитываются только выходные — это отмечается в расчёте.</p>
+  <h3>Календарь по стране СЦ</h3>
+  <table class="tbl" style="max-width:640px"><tr><th>Страна (значение в выгрузке)</th><th>Календарь</th></tr>
+    {% for c in k.countries %}
+    <tr><td><input type="hidden" name="country_{{ loop.index0 }}" value="{{ c }}">{{ c }}</td>
+      <td><select name="country_cal_{{ loop.index0 }}">{% for code, cal in s.calendars.items() %}<option value="{{ code }}" {{ 'selected' if s.contract.country_map.get(c, s.contract.default_calendar) == code }}>{{ cal.name }}</option>{% endfor %}</select></td></tr>
+    {% endfor %}
+    <tr><td class="muted">Остальные / страна не указана</td>
+      <td><select name="default_calendar">{% for code, cal in s.calendars.items() %}<option value="{{ code }}" {{ 'selected' if s.contract.default_calendar == code }}>{{ cal.name }}</option>{% endfor %}</select></td></tr>
+  </table>
+  <input type="hidden" name="n_countries" value="{{ k.countries|length }}">
+  {% for code, cal in s.calendars.items() %}
+  <h3>{{ cal.name }} <span class="muted small">({{ code }})</span></h3>
+  <input type="hidden" name="cal_{{ code }}_present" value="1">
+  <div class="btn-row" style="align-items:flex-end">
+    <label class="field"><span>Название</span><input type="text" name="cal_{{ code }}_name" value="{{ cal.name }}"></label>
+    <label class="field"><span>Годы, для которых праздники заполнены</span><input type="text" name="cal_{{ code }}_years" value="{{ cal.years|join(', ') }}"></label>
+    <label class="field" style="flex:1;min-width:260px"><span>Источник</span><input type="text" name="cal_{{ code }}_source" value="{{ cal.source or '' }}" style="width:100%"></label>
+  </div>
+  <div class="grid2" style="margin-top:6px">
+    <label class="field"><span>Нерабочие дни на буднях (праздники и переносы)</span>
+      <textarea name="cal_{{ code }}_holidays" rows="8">{% for d in cal.holidays %}{{ d|d }}
+{% endfor %}</textarea></label>
+    <label class="field"><span>Рабочие субботы и воскресенья (переносы)</span>
+      <textarea name="cal_{{ code }}_workdays" rows="8">{% for d in cal.workdays %}{{ d|d }}
+{% endfor %}</textarea></label>
+  </div>
+  {% endfor %}
+  <h3>Добавить календарь</h3>
+  <div class="btn-row">
+    <label class="field"><span>Код (латиницей)</span><input type="text" name="new_code" placeholder="AM" style="width:90px"></label>
+    <label class="field"><span>Название</span><input type="text" name="new_name" placeholder="Армения"></label>
+  </div>
+  <p style="margin-top:12px"><button class="btn primary" type="submit">Сохранить</button></p>
+</form>
+
+{% elif tab == 'mapping' %}
+<form class="card" method="post" action="{{ url_for('settings_save', section='mapping') }}">
+  <h2>Сопоставление столбцов</h2>
+  <p class="muted small">Если в выгрузке переименуют столбец, выберите новый здесь. Список столбцов — из последнего проверенного файла.</p>
+  <table class="tbl" style="max-width:820px">
+    <tr><th>Поле программы</th><th>Столбец в выгрузке</th></tr>
+    {% for key, label, kind, req, default in FIELDS %}
+    <tr><td>{{ label }}{% if req %} <b style="color:var(--high)">*</b>{% endif %}<br><span class="muted small">по умолчанию: {{ default }}</span></td>
+      <td>{{ col_select('map_' ~ key, s.mapping.get(key), headers) }}</td></tr>
+    {% endfor %}
+  </table>
+  <h3>Лист комментариев</h3>
+  <div class="btn-row">
+    <label class="field"><span>Столбец ET</span><input type="text" name="cm_et" value="{{ s.comments_mapping.et }}"></label>
+    <label class="field"><span>Столбец комментария</span><input type="text" name="cm_text" value="{{ s.comments_mapping.text }}"></label>
+  </div>
+  <h3>Лист актов</h3>
+  <div class="btn-row">
+    {% for key, label in [('et','ET'),('act_date','Дата акта'),('act_number','Номер акта'),('status','Статус')] %}
+    <label class="field"><span>{{ label }}</span><input type="text" name="zm_{{ key }}" value="{{ s.closure_mapping.get(key, '') }}"></label>
+    {% endfor %}
+  </div>
+  <p style="margin-top:12px"><button class="btn primary" type="submit">Сохранить</button></p>
+</form>
+
+{% elif tab == 'statuses' %}
+<form class="card" method="post" action="{{ url_for('settings_save', section='statuses') }}">
+  <h2>Статусы</h2>
+  <p class="muted small">Для каждого статуса: из какого столбца брать дату входа в статус, контролировать ли простой и общий срок. Пустой порог — используется общий.
+    Если столбец даты не задан или пуст, дни считаются от первого обнаружения статуса программой (показываются как «≥ N»).</p>
+  <div class="tbl-wrap">
+  <table class="tbl sttab">
+    <tr><th>Статус</th><th>Столбец даты входа в статус</th><th>Контроль простоя</th><th>Порог, дн.</th><th>Контроль общего срока</th><th>Срок, дн.</th><th>До заверш.*</th><th>Закрыт**</th></tr>
+    {% set n = k.statuses|length %}
+    {% for st in k.statuses %}{% set i = loop.index0 %}
+      {% set ps = s.stuck.per_status.get(st, {}) %}{% set po = s.overdue.per_status.get(st, {}) %}
+      <tr>
+        <td><input type="hidden" name="st_{{ i }}" value="{{ st }}">{{ st }}</td>
+        <td>{{ col_select('sd_' ~ i, s.status_date_columns.get(st), headers, '— нет —') }}</td>
+        <td><label class="check"><input type="checkbox" name="stuck_on_{{ i }}" value="1" {{ 'checked' if ps.get('enabled', True) }}> контролировать</label></td>
+        <td><input type="number" min="0" name="stuck_days_{{ i }}" value="{{ ps.get('days') if ps.get('days') is not none else '' }}" placeholder="{{ s.stuck.default_days }}"></td>
+        <td><label class="check"><input type="checkbox" name="od_on_{{ i }}" value="1" {{ 'checked' if po.get('enabled', True) }}> контролировать</label></td>
+        <td><input type="number" min="0" name="od_days_{{ i }}" value="{{ po.get('days') if po.get('days') is not none else '' }}" placeholder="{{ s.overdue.default_days if s.overdue.default_days is not none else '' }}"></td>
+        <td><input type="checkbox" name="early" value="{{ st }}" {{ 'checked' if st in s.early_statuses }}></td>
+        <td><input type="checkbox" name="closed" value="{{ st }}" {{ 'checked' if st in (s.closed_statuses or []) }}></td>
+      </tr>
+    {% endfor %}
+    <tr>
+      <td><input type="text" name="st_{{ n }}" placeholder="новый статус" style="width:160px"></td>
+      <td>{{ col_select('sd_' ~ n, '', headers, '— нет —') }}</td>
+      <td><label class="check"><input type="checkbox" name="stuck_on_{{ n }}" value="1" checked> контролировать</label></td>
+      <td><input type="number" min="0" name="stuck_days_{{ n }}"></td>
+      <td><label class="check"><input type="checkbox" name="od_on_{{ n }}" value="1" checked> контролировать</label></td>
+      <td><input type="number" min="0" name="od_days_{{ n }}"></td><td></td><td></td>
+    </tr>
+  </table></div>
+  <input type="hidden" name="n_status" value="{{ n }}">
+  <p class="muted small">* «До завершения» — статусы, при которых наличие даты завершения ремонта считается противоречием (проверка «Есть дата завершения, а статус — до завершения»).<br>
+    ** «Закрыт» — ремонт в этом статусе полностью закрыт: он не показывается в списках, не участвует в контроле, аналитике и счётчиках
+    (посмотреть такие ремонты: «Все ремонты» → «Наличие в выгрузке» → «Закрытые»). По умолчанию — «Отчет».</p>
+  <button class="btn primary" type="submit">Сохранить</button>
+</form>
+
+{% elif tab == 'stuck' %}
+<form class="card" method="post" action="{{ url_for('settings_save', section='stuck') }}">
+  <h2>Контроль простоя (без смены статуса)</h2>
+  <div class="btn-row">
+    <label class="check"><input type="checkbox" name="enabled" value="1" {{ 'checked' if s.stuck.enabled }}> контроль включён</label>
+    <label class="field"><span>Общий порог, дней (предупреждение, если больше)</span><input type="number" min="0" name="default_days" value="{{ s.stuck.default_days if s.stuck.default_days is not none else '' }}"></label>
+  </div>
+  <p class="muted small">Порядок выбора порога: статус + АСЦ → статус (вкладка «Статусы») → АСЦ → общий. Исключённые статусы не контролируются.</p>
+  <h3>Пороги для АСЦ</h3>
+  <table class="tbl" style="max-width:700px"><tr><th>АСЦ</th><th>Порог, дн.</th></tr>
+    {% set pa = s.stuck.per_asc.items()|list %}
+    {% for a, v in pa %}<tr><td><input type="hidden" name="asc_{{ loop.index0 }}" value="{{ a }}">{{ a }}</td><td><input type="number" min="0" name="asc_days_{{ loop.index0 }}" value="{{ v.days }}"> <span class="muted small">очистите, чтобы удалить</span></td></tr>{% endfor %}
+    <tr><td><input type="text" name="asc_{{ pa|length }}" list="ascs" placeholder="добавить АСЦ" style="width:100%"></td><td><input type="number" min="0" name="asc_days_{{ pa|length }}"></td></tr>
+  </table>
+  <input type="hidden" name="n_asc" value="{{ pa|length }}">
+  <h3>Пороги для сочетания статуса и АСЦ</h3>
+  <table class="tbl" style="max-width:860px"><tr><th>Статус</th><th>АСЦ</th><th>Порог, дн.</th></tr>
+    {% set psa = s.stuck.per_status_asc %}
+    {% for r in psa %}<tr><td><input type="hidden" name="sa_status_{{ loop.index0 }}" value="{{ r.status }}">{{ r.status }}</td><td><input type="hidden" name="sa_asc_{{ loop.index0 }}" value="{{ r.asc }}">{{ r.asc }}</td><td><input type="number" min="0" name="sa_days_{{ loop.index0 }}" value="{{ r.days }}"></td></tr>{% endfor %}
+    <tr><td><select name="sa_status_{{ psa|length }}"><option value=""></option>{% for st in k.statuses %}<option>{{ st }}</option>{% endfor %}</select></td>
+      <td><input type="text" name="sa_asc_{{ psa|length }}" list="ascs" placeholder="АСЦ" style="width:100%"></td><td><input type="number" min="0" name="sa_days_{{ psa|length }}"></td></tr>
+  </table>
+  <input type="hidden" name="n_sa" value="{{ psa|length }}">
+  <datalist id="ascs">{% for a in k.ascs %}<option value="{{ a }}">{% endfor %}</datalist>
+  <p style="margin-top:12px"><button class="btn primary" type="submit">Сохранить</button></p>
+</form>
+
+{% elif tab == 'overdue' %}
+<form class="card" method="post" action="{{ url_for('settings_save', section='overdue') }}">
+  <h2>Контроль общего срока ремонта</h2>
+  <p class="muted small">Возраст ремонта считается от даты создания до момента выгрузки. Это не то же самое, что время в текущем статусе.</p>
+  <div class="btn-row">
+    <label class="check"><input type="checkbox" name="enabled" value="1" {{ 'checked' if s.overdue.enabled }}> контроль включён</label>
+    <label class="field"><span>Допустимый срок, дней (пусто — не задан)</span><input type="number" min="0" name="default_days" value="{{ s.overdue.default_days if s.overdue.default_days is not none else '' }}"></label>
+    <label class="field"><span>Поле категории для отдельных сроков</span>{{ col_select('category_field', s.overdue.category_field, headers, '— без категорий —') }}</label>
+  </div>
+  <p class="muted small">Порядок выбора срока: статус (вкладка «Статусы») → категория → общий. При смене поля категории список сроков по категориям очищается.</p>
+  {% if k.cat_field %}
+  <h3>Сроки по значениям «{{ k.cat_field }}»</h3>
+  <table class="tbl" style="max-width:700px"><tr><th>Значение</th><th>Контроль</th><th>Срок, дн.</th></tr>
+    {% for c in k.cats %}{% set pc = s.overdue.per_category.get(c, {}) %}
+    <tr><td><input type="hidden" name="cat_{{ loop.index0 }}" value="{{ c }}">{{ c }}</td>
+      <td><label class="check"><input type="checkbox" name="cat_on_{{ loop.index0 }}" value="1" {{ 'checked' if pc.get('enabled', True) }}> контролировать</label></td>
+      <td><input type="number" min="0" name="cat_days_{{ loop.index0 }}" value="{{ pc.get('days') if pc.get('days') is not none else '' }}" placeholder="{{ s.overdue.default_days if s.overdue.default_days is not none else '' }}"></td></tr>
+    {% endfor %}
+  </table>
+  <input type="hidden" name="n_cat" value="{{ k.cats|length }}">
+  {% endif %}
+  <p style="margin-top:12px"><button class="btn primary" type="submit">Сохранить</button></p>
+</form>
+
+{% elif tab == 'checks' %}
+<form class="card" method="post" action="{{ url_for('settings_save', section='checks') }}">
+  <h2>Проверки контрольных дат</h2>
+  <p class="muted small">Ремонты с найденными проблемами попадают в «Требуют внимания» с причиной «Проблемы с датами». Даты сравниваются по календарным дням.</p>
+  {% for code, label in DATE_CHECKS %}
+  <label class="check" style="display:flex;margin:6px 0"><input type="checkbox" name="chk_{{ code }}" value="1" {{ 'checked' if s.date_checks.get(code) }}> {{ label }}</label>
+  {% endfor %}
+  <p class="muted small">Статусы «до завершения» задаются на вкладке «Статусы».</p>
+  <button class="btn primary" type="submit">Сохранить</button>
+</form>
+
+{% elif tab == 'rules' %}
+<form class="card" method="post" action="{{ url_for('settings_save', section='rules') }}">
+  <h2>Свои признаки проблемы</h2>
+  <p class="muted small">Правило срабатывает, если значение столбца выгрузки удовлетворяет условию. Баллы добавляются к критичности.</p>
+  <div class="tbl-wrap"><table class="tbl">
+    <tr><th>Вкл.</th><th>Название</th><th>Столбец</th><th>Условие</th><th>Значение</th><th>Баллы</th><th>Удалить</th></tr>
+    {% set rl = s.custom_rules %}
+    {% for r in rl + [{'id': '', 'enabled': True, 'label': '', 'field': '', 'op': 'eq', 'value': '', 'points': 5}] %}{% set i = loop.index0 %}
+    <tr>
+      <td><input type="hidden" name="r_id_{{ i }}" value="{{ r.id }}"><input type="checkbox" name="r_on_{{ i }}" value="1" {{ 'checked' if r.enabled }}></td>
+      <td><input type="text" name="r_label_{{ i }}" value="{{ r.label }}" placeholder="{{ 'новое правило' if not r.id }}"></td>
+      <td>{{ col_select('r_field_' ~ i, r.field, headers, '— столбец —') }}</td>
+      <td><select name="r_op_{{ i }}">{% for op, l in OPS.items() %}<option value="{{ op }}" {{ 'selected' if op == r.op }}>{{ l }}</option>{% endfor %}</select></td>
+      <td><input type="text" name="r_value_{{ i }}" value="{{ r.value }}" style="width:140px"></td>
+      <td><input type="number" name="r_points_{{ i }}" value="{{ r.points }}"></td>
+      <td>{% if r.id %}<input type="checkbox" name="r_del_{{ i }}" value="1">{% endif %}</td>
+    </tr>
+    {% endfor %}
+  </table></div>
+  <input type="hidden" name="n_rules" value="{{ rl|length }}">
+  <button class="btn primary" type="submit">Сохранить</button>
+</form>
+
+{% elif tab == 'weights' %}
+<form class="card" method="post" action="{{ url_for('settings_save', section='weights') }}">
+  <h2>Критичность</h2>
+  <p class="muted small">Баллы = сумма по всем причинам. Список «Требуют внимания» сортируется по баллам. Уровень: высокая — от {{ s.levels.high }}, средняя — от {{ s.levels.medium }}, иначе низкая.</p>
+  {% set wl = {'stuck_base': 'Простой: баллы за факт превышения', 'stuck_per_day': 'Простой: баллы за каждый день сверх порога', 'overdue_base': 'Срок: баллы за факт просрочки', 'overdue_per_day': 'Срок: баллы за каждый день просрочки', 'disappeared_base': 'Исчезновение: баллы за факт', 'disappeared_per_day': 'Исчезновение: баллы за каждый день', 'date_issue': 'Проблема с датами: баллы за каждую', 'contract_overdue_base': 'Договорный срок просрочен: баллы за факт', 'contract_overdue_per_day': 'Договорный срок: баллы за каждый р.д. просрочки', 'contract_soon': 'Договорный срок: «скоро срок»', 'contract_done_late': 'Договорный срок: завершено с нарушением (если показывать)', 'contract_no_data': 'Договорный срок: недостаточно данных (если показывать)'} %}
+  <table class="kv" style="max-width:640px">
+    {% for key, label in wl.items() %}<tr><th>{{ label }}</th><td><input type="number" min="0" name="w_{{ key }}" value="{{ s.weights.get(key, 0) }}"></td></tr>{% endfor %}
+    <tr><th>Высокая критичность — от, баллов</th><td><input type="number" min="0" name="l_high" value="{{ s.levels.high }}"></td></tr>
+    <tr><th>Средняя критичность — от, баллов</th><td><input type="number" min="0" name="l_medium" value="{{ s.levels.medium }}"></td></tr>
+    <tr><th>Малая выборка для аналитики — меньше, ремонтов</th><td><input type="number" min="1" name="small_sample" value="{{ s.small_sample }}"></td></tr>
+    <tr><th>Период «новых ремонтов» по умолчанию, дней</th><td><input type="number" min="1" name="new_period_days" value="{{ s.new_period_days }}"></td></tr>
+  </table>
+  <p style="margin-top:12px"><button class="btn primary" type="submit">Сохранить</button></p>
+</form>
+
+{% elif tab == 'history' %}
+<form class="card" method="post" action="{{ url_for('settings_save', section='history') }}">
+  <h2>История и загружаемые данные</h2>
+  <h3>Отслеживаемые даты</h3>
+  <p class="muted small">Изменение этих дат между загрузками записывается в историю.</p>
+  {% set datecols = k.date_headers %}
+  {% for c in (datecols + s.tracked_date_fields)|unique %}
+  <label class="check" style="display:inline-flex;width:330px;margin:3px 0"><input type="checkbox" name="tracked" value="{{ c }}" {{ 'checked' if c in s.tracked_date_fields }}> {{ c }}</label>
+  {% endfor %}
+  <h3>Не загружать в программу (персональные данные)</h3>
+  <p class="muted small">По одному столбцу в строке. Эти столбцы не сохраняются в базе программы и не показываются в карточке.</p>
+  <textarea name="excluded" rows="8" style="max-width:520px">{{ s.excluded_columns|join('\n') }}</textarea>
+  <p style="margin-top:12px"><button class="btn primary" type="submit">Сохранить</button></p>
+</form>
+
+{% elif tab == 'contacts' %}
+{% set ci = cinfo %}
+<div class="card">
+  <h2>Справочник контактов АСЦ</h2>
+  <p class="muted small">Файл Excel со справочником контрагентов (как «…04092026.xlsx»): столбцы «Код ASC NCO», «Контактные лица», «Должность»,
+    «Роль контактного лица», «e-mail (КЛ)», телефоны. АСЦ сопоставляются с ремонтами по коду (КодАсцNsoВыполняющийРемонт; ведущие нули не важны).
+    В программу попадают только контакты — банковские счета, ИНН, договоры не сохраняются. Новый файл полностью заменяет прежний справочник.</p>
+  <form method="post" action="{{ url_for('contacts_upload') }}" enctype="multipart/form-data" class="btn-row" style="margin-top:8px">
+    <input type="file" name="file" accept=".xlsx,.xlsm">
+    <button class="btn primary" type="submit">Загрузить справочник</button>
+  </form>
+  {% if ci.meta %}
+  <p class="small" style="margin-top:10px">Загружен {{ ci.meta.loaded_at|dt }} из файла <b>{{ ci.meta.file }}</b> (лист «{{ ci.meta.sheet }}»):
+    {{ ci.codes|n }} АСЦ, {{ ci.contacts|n }} контактов, с e-mail — {{ ci.with_email|n }}.
+    Из {{ ci.asc_total }} АСЦ в текущей выгрузке контакты есть у {{ ci.asc_total - ci.missing|length }}.</p>
+  {% if ci.missing %}<details><summary class="small">АСЦ без контактов в справочнике ({{ ci.missing|length }})</summary>
+    <table class="tbl" style="max-width:640px"><tr><th>Код</th><th>АСЦ</th><th class="num">Ремонтов</th></tr>
+    {% for m in ci.missing %}<tr><td>{{ m.asc_code or '—' }}</td><td>{{ m.asc or '—' }}</td><td class="num">{{ m.n }}</td></tr>{% endfor %}</table></details>{% endif %}
+  {% else %}<p class="muted small" style="margin-top:10px">Справочник ещё не загружен.</p>{% endif %}
+</div>
+<form class="card" method="post" action="{{ url_for('settings_save', section='contacts') }}">
+  <h2>Кому писать</h2>
+  <p class="muted small">По ролям контактных лиц: кого ставить в «Кому» и в «Копию» в письмах-запросах («Где застряли», «Лист», карточка ремонта).
+    В самом письме адреса можно поправить и добавить любые контакты АСЦ одним нажатием.</p>
+  <table class="tbl" style="max-width:640px">
+    <tr><th>Роль</th><th>Кому</th><th>Копия</th></tr>
+    {% for r in ci.roles %}<tr><td>{{ r }}</td>
+      <td><input type="checkbox" name="to_roles" value="{{ r }}" {{ 'checked' if r in ci.cfg.to_roles }}></td>
+      <td><input type="checkbox" name="cc_roles" value="{{ r }}" {{ 'checked' if r in ci.cfg.cc_roles }}></td></tr>
+    {% else %}<tr><td colspan="3" class="muted">Роли появятся после загрузки справочника.</td></tr>{% endfor %}
+  </table>
+  <h3 style="margin-top:14px">Где открывать письмо</h3>
+  <label class="check" style="display:flex"><input type="radio" name="open_in" value="mailto" {{ 'checked' if ci.cfg.open_in != 'web' }}> в почтовой программе на компьютере (Outlook и т. п.)</label>
+  <label class="check" style="display:flex"><input type="radio" name="open_in" value="web" {{ 'checked' if ci.cfg.open_in == 'web' }}> в почте в браузере — Яндекс Почта / Яндекс 360 (новая вкладка)</label>
+  <label class="field" style="margin-top:6px"><span>Адрес вашей почты в браузере — скопируйте из адресной строки, когда открыты «Входящие»</span>
+    <input type="text" name="web_url" value="{{ ci.cfg.web_url }}" placeholder="https://mail.360.yandex.ru/?uid=…#/inbox" style="width:560px"></label>
+  {% if ci.cfg.web_base %}<p class="muted small">Новое письмо будет открываться по адресу <code>{{ ci.cfg.web_base }}…</code></p>{% endif %}
+  <label class="field" style="margin-top:10px"><span>Разделитель адресов для почтовой программы</span>
+    <select name="sep"><option value=";" {{ 'selected' if ci.cfg.sep == ';' }}>; — Outlook</option><option value="," {{ 'selected' if ci.cfg.sep == ',' }}>, — другие почтовые программы</option></select></label>
+  <p style="margin-top:10px"><button class="btn primary" type="submit">Сохранить</button></p>
+</form>
+
+{% elif tab == 'general' %}
+<form class="card" method="post" action="{{ url_for('settings_save', section='general') }}">
+  <h2>Общие</h2>
+  <div class="btn-row">
+    <label class="field"><span>Автор комментариев по умолчанию</span><input type="text" name="author" value="{{ s.author }}"></label>
+    <label class="field"><span>Хранить автоматических резервных копий</span><input type="number" min="1" name="backup_keep" value="{{ s.backup_keep }}"></label>
+  </div>
+  <div class="btn-row" style="margin-top:12px">
+    <label class="field"><span>Ссылка на ремонт в трекинге ({id} — Id ремонта из выгрузки, {et} — номер ET)</span><input type="text" name="tracking_url" value="{{ s.tracking_url }}" style="width:560px"></label>
+    <label class="field"><span>Слова-метки демо-ремонта (через «;»)</span><input type="text" name="demo_keywords" value="{{ (s.demo_keywords or [])|join('; ') }}" style="width:260px"></label>
+  </div>
+  <p class="muted small">Если в комментарии к ремонту (из Excel или своём) есть такое слово отдельно — например «Демо», «ДЕМО», «демо, клиент забрал» —
+    ремонт считается демо: критичность и договорные сроки по нему не считаются, в «Требуют внимания» он не попадает. Регистр не важен; «демонтаж» не считается.
+    Пустое поле — правило выключено.</p>
+  <p style="margin-top:12px"><button class="btn primary" type="submit">Сохранить</button></p>
+</form>
+<div class="card">
+  <h2>Резервные копии базы</h2>
+  <p class="muted small">База и копии лежат в папке <code>{{ data_dir }}</code>. Копия создаётся автоматически перед каждой загрузкой.
+    Чтобы восстановить копию: закройте программу, замените файл <code>monitor.db</code> нужной копией (переименовав её в monitor.db) и запустите программу снова.</p>
+  <form method="post" action="{{ url_for('make_backup') }}"><button class="btn" type="submit">Создать резервную копию сейчас</button></form>
+  <table class="tbl" style="max-width:760px;margin-top:10px"><tr><th>Файл</th><th>Создан</th><th class="num">Размер, МБ</th></tr>
+    {% for b in backups[:30] %}<tr><td>{{ b.name }}</td><td>{{ b.time }}</td><td class="num">{{ b.size_mb }}</td></tr>{% else %}<tr><td colspan="3" class="muted">Копий пока нет.</td></tr>{% endfor %}
+  </table>
+</div>
+{% endif %}
+{% endblock %}

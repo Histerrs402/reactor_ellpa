@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% from "macros.html" import pager with context %}
+{% block title %}Комментарии{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div><h1>Комментарии и журнал действий</h1>
+    <p>Ваши комментарии хранятся в базе программы и не перезаписываются при загрузке Excel.
+      Комментарии из листа Comments_DB импортируются отдельно (с пометкой «из Excel»); если в Excel комментарий изменился, сохраняется новая запись, старая не удаляется.</p></div>
+</div>
+
+<div class="card">
+  <h2>Добавить комментарий</h2>
+  <form method="post" action="{{ url_for('comments') }}" class="btn-row" style="align-items:flex-start">
+    <input type="hidden" name="token" value="{{ token }}">
+    <label class="field"><span>ET</span><input type="text" name="et" value="{{ prefill }}" placeholder="ET0000000" required style="width:140px"></label>
+    <label class="field" style="flex:1;min-width:260px"><span>Текст</span><textarea name="text" required style="min-height:38px"></textarea></label>
+    <label class="field"><span>Автор</span><input type="text" name="author" value="{{ author }}" style="width:160px"></label>
+    <label class="field"><span>&nbsp;</span><button class="btn primary" type="submit">Сохранить</button></label>
+  </form>
+</div>
+
+<form class="filters" method="get">
+  <label class="field"><span>ET или текст</span><input type="search" name="q" value="{{ q }}"></label>
+  <label class="field"><span>Источник</span>
+    <select name="source"><option value="">Все</option>
+      {% for v, l in [('user', 'Пользователь'), ('excel', 'Из Excel'), ('system', 'Действия')] %}
+      <option value="{{ v }}" {{ 'selected' if src == v }}>{{ l }} ({{ by_src.get(v, 0) }})</option>{% endfor %}
+    </select></label>
+  <label class="field"><span>Автор</span><input type="text" name="author" value="{{ author_q }}"></label>
+  <div class="btn-row"><button class="btn primary" type="submit">Применить</button><a class="btn" href="{{ url_for('comments') }}">Сбросить</a></div>
+</form>
+
+<div class="card tight">
+  <div class="tbl-wrap"><table class="tbl">
+    <tr><th>Дата</th><th>ET</th><th>Статус сейчас</th><th>АСЦ</th><th>Комментарий</th><th>Автор</th><th>Источник</th></tr>
+    {% for c in rows %}{% set it = by_et.get(c.et) %}
+    <tr>
+      <td class="nowrap">{{ c.created_at|dt }}</td>
+      <td class="et"><a href="{{ url_for('repair', et=c.et) if it else '#' }}">{{ c.et }}</a></td>
+      <td>{{ it.status if it else '—' }}{% if it and it.disappeared %} <span class="muted small">(исчез)</span>{% endif %}</td>
+      <td>{{ it.asc if it else '—' }}</td>
+      <td style="white-space:pre-wrap;max-width:520px">{{ c.text }}</td>
+      <td>{{ c.author or '—' }}</td>
+      <td>{% if c.source == 'excel' %}<span class="chip" title="Дата написания в Excel неизвестна; указана дата импорта">из Excel</span>{% elif c.source == 'system' %}<span class="chip">действие</span>{% else %}<span class="chip">пользователь</span>{% endif %}</td>
+    </tr>
+    {% else %}<tr><td colspan="7" class="muted">Комментариев нет.</td></tr>{% endfor %}
+  </table></div>
+</div>
+{{ pager(page, pages) }}
+<p class="muted small">Всего: {{ total|n }}.</p>
+{% endblock %}

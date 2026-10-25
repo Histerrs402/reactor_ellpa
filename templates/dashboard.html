@@ -1,0 +1,120 @@
+{% extends "base.html" %}
+{% from "macros.html" import level_badge, days, filter_bar with context %}
+{% block title %}Главная панель{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div><h1>Главная панель</h1>
+    <p>Что сейчас требует внимания и почему. Сроки считаются в календарных днях на момент среза выгрузки ({{ as_of|dt }}).</p>
+    <p class="muted small">В работе: <b>{{ kpi.total|n }}</b>{% if kpi.demo %}, из них демо (без критичности): <a href="{{ reg(problem='demo') }}">{{ kpi.demo|n }}</a>{% endif %}.
+      {% if kpi.closed %}Закрытые со статусом «Отчет» не показываются: <a href="{{ reg(presence='closed') }}">{{ kpi.closed|n }}</a>.{% endif %}</p></div>
+</div>
+
+{% call filter_bar(f, opts, url_for('dashboard'), show_q=False) %}
+  <label class="field"><span>Новые за</span>
+    <select name="period">{% for d in [1, 3, 7, 14, 30, 90] %}<option value="{{ d }}" {{ 'selected' if period == d }}>{{ d }} дн.</option>{% endfor %}</select></label>
+{% endcall %}
+
+{% if contract_on %}
+<div class="section-title">Договорные сроки СЦ (рабочие дни)</div>
+<div class="kpis contract">
+  <a class="kpi {{ 'alert' if ckpi.overdue }}" href="{{ link('contract_page', cstate=['overdue'], **base_q) }}">
+    <div class="label">Просрочено сейчас</div>
+    <div class="value">{{ ckpi.overdue|n }}</div>
+    <div class="sub">{% for n, label in CNORMS %}{{ label.split(' ')[0] }}: {{ ckpi_norm[n] }}{{ ' · ' if not loop.last }}{% endfor %}</div>
+  </a>
+  <a class="kpi soft" href="{{ link('contract_page', cstate=['soon'], **base_q) }}">
+    <div class="label">Скоро срок</div><div class="value">{{ ckpi.soon|n }}</div>
+    <div class="sub">осталось 1 р.д. или меньше</div></a>
+  <a class="kpi calm" href="{{ link('contract_page', cstate=['waiting'], **base_q) }}">
+    <div class="label">Ожидание запчастей</div><div class="value">{{ ckpi.waiting|n }}</div>
+    <div class="sub">гарантийный срок приостановлен</div></a>
+  <a class="kpi soft" href="{{ link('contract_page', cstate=['done_late'], **base_q) }}">
+    <div class="label">Завершено с нарушением</div><div class="value">{{ ckpi.done_late|n }}</div>
+    <div class="sub">среди ремонтов в выгрузке</div></a>
+  <a class="kpi calm" href="{{ link('contract_page', cstate=['no_data'], **base_q) }}">
+    <div class="label">Недостаточно данных</div><div class="value">{{ ckpi.no_data|n }}</div>
+    <div class="sub">срок нельзя рассчитать достоверно</div></a>
+</div>
+<div class="section-title">Внутренние предупреждения</div>
+{% endif %}
+<div class="kpis">
+  <a class="kpi hero" href="{{ att() }}">
+    <div class="label">Требуют внимания</div>
+    <div class="value">{{ kpi.problem|n }}</div>
+    <div class="sub">с любым предупреждением, включая исчезнувшие</div>
+  </a>
+  <a class="kpi" href="{{ reg() }}">
+    <div class="label">Ремонтов в работе</div>
+    <div class="value">{{ kpi.total|n }}</div>
+    <div class="sub">без закрытых («Отчет»), на {{ as_of|dt }}</div>
+  </a>
+  <a class="kpi {{ 'alert' if kpi.stuck }}" href="{{ att(reason='stuck') }}">
+    <div class="label">Без смены статуса дольше порога</div>
+    <div class="value">{{ kpi.stuck|n if stuck_enabled else '—' }}</div>
+    <div class="sub">{% if stuck_enabled %}порог по умолчанию {{ stuck_default }} дн.{% if excluded_statuses %}; без контроля: {{ excluded_statuses|join(', ') }}{% endif %}{% else %}контроль выключен{% endif %}</div>
+  </a>
+  <a class="kpi {{ 'alert' if kpi.overdue }}" href="{{ att(reason='overdue') }}">
+    <div class="label">Превышен общий срок ремонта</div>
+    <div class="value">{{ kpi.overdue|n if overdue_enabled else '—' }}</div>
+    <div class="sub">{% if overdue_enabled %}{% if overdue_default is not none %}срок {{ overdue_default }} дн. от создания{% else %}только по заданным категориям{% endif %}{% else %}правило не настроено{% endif %}</div>
+  </a>
+  <a class="kpi {{ 'alert' if kpi.unconfirmed }}" href="{{ att(reason='disappeared') }}">
+    <div class="label">Исчезли из выгрузки, закрытие не подтверждено</div>
+    <div class="value">{{ kpi.unconfirmed|n }}</div>
+    <div class="sub">нет в выгрузке и нет в листе актов</div>
+  </a>
+  <a class="kpi" href="{{ reg(created_from=new_since.strftime('%Y-%m-%d') if new_since else None) }}">
+    <div class="label">Новые ремонты за {{ period }} дн.</div>
+    <div class="value">{{ kpi.new|n }}</div>
+    <div class="sub">по дате создания, с {{ new_since|d }}</div>
+  </a>
+  <a class="kpi" href="{{ att(reason='date') }}">
+    <div class="label">Отсутствующие или противоречивые даты</div>
+    <div class="value">{{ kpi.date_issues|n }}</div>
+    <div class="sub">проверки настраиваются</div>
+  </a>
+</div>
+{% if kpi.detected_basis %}
+<div class="note">У {{ kpi.detected_basis }} ремонтов в выгрузке нет даты входа в текущий статус — для них дни считаются от первого обнаружения программой и показаны как «≥ N».
+  <a href="{{ reg(basis='detected') }}">Показать</a></div>
+{% endif %}
+
+<div class="grid2">
+  <div class="card">
+    <div class="card-head"><h2>Ремонты по статусам</h2><span class="muted small">нажмите на строку, чтобы открыть список</span></div>
+    {{ status_chart }}
+    <details class="table-view"><summary>Таблица</summary>
+      <table class="tbl"><tr><th>Статус</th><th class="num">Всего</th><th class="num">Дольше порога</th></tr>
+      {% for r in st_rows %}<tr><td><a href="{{ r.href }}">{{ r.label }}</a></td><td class="num">{{ (r['values'][0] + r['values'][1])|n }}</td><td class="num">{{ r['values'][1]|n }}</td></tr>{% endfor %}
+      </table></details>
+  </div>
+  <div class="card">
+    <div class="card-head"><h2>Ремонты по АСЦ</h2><span class="muted small">топ-15 из {{ asc_total }} по числу ремонтов · <a href="{{ url_for('analytics_page') }}">все АСЦ</a></span></div>
+    {{ asc_chart }}
+    <details class="table-view"><summary>Таблица</summary>
+      <table class="tbl"><tr><th>АСЦ</th><th class="num">Всего</th><th class="num">С предупреждениями</th></tr>
+      {% for r in asc_rows %}<tr><td><a href="{{ r.href }}">{{ r.label }}</a></td><td class="num">{{ (r['values'][0] + r['values'][1])|n }}</td><td class="num">{{ r['values'][1]|n }}</td></tr>{% endfor %}
+      </table></details>
+    <p class="muted small">Число предупреждений само по себе не говорит о качестве работы АСЦ — сравнивайте доли и размер выборки в разделе «Аналитика».</p>
+  </div>
+</div>
+
+<div class="card tight">
+  <div class="card-head" style="padding:14px 16px 0"><h2>Самые срочные</h2><a class="small" href="{{ att() }}">Весь список →</a></div>
+  <div class="tbl-wrap">
+  <table class="tbl">
+    <tr><th>ET</th><th>Критичность</th><th>Статус</th><th>АСЦ</th><th class="num">Дней в статусе</th><th class="num">Возраст</th><th>Причины</th></tr>
+    {% for i in top %}
+    <tr class="lv-{{ i.level }}">
+      <td class="et"><a href="{{ url_for('repair', et=i.et) }}">{{ i.et }}</a></td>
+      <td>{{ level_badge(i) }}</td>
+      <td>{{ i.status or '—' }}</td>
+      <td>{{ i.asc or '—' }}</td>
+      <td class="num">{{ days(i) }}</td>
+      <td class="num">{{ i.age_days if i.age_days is not none else '—' }}</td>
+      <td class="reasons">{% for r in i.reasons[:3] %}<span class="reason">{{ r.text }}</span>{% endfor %}</td>
+    </tr>
+    {% else %}<tr><td colspan="7" class="muted">Предупреждений нет.</td></tr>{% endfor %}
+  </table></div>
+</div>
+{% endblock %}

@@ -1,0 +1,22 @@
+<div class="kpis m10">
+  {% for k in ORDER %}{% set label, cls = STATES[k] %}
+  <a class="kpi {{ 'alert' if k == 'overdue' and counts.get(k) }} {{ 'sel' if st == k }}" href="{{ url_with(m10=None if st == k else k) }}">
+    <div class="label">{{ label }}</div><div class="value">{{ counts.get(k, 0)|n }}</div></a>
+  {% endfor %}
+</div>
+<details class="card m10-set">
+  <summary><b>Настройки раздела</b> <span class="muted small">— модели, срок {{ cfg.days }} дн., признак Door to door</span></summary>
+  <form method="post" action="{{ url_for('models10_settings') }}">
+    <input type="hidden" name="back" value="{{ request.full_path }}">
+    <div class="grid2" style="margin-top:10px">
+      <label class="field"><span>Модели — по одной в строке (подходит всё, что начинается так; пробелы и регистр не важны)</span>
+        <textarea name="models" rows="8" style="font-family:ui-monospace,Consolas,monospace">{{ cfg.models|join('\n') }}</textarea></label>
+      <div>
+        <label class="field"><span>Срок устранения дефекта, календарных дней от даты приёма</span><input type="number" min="1" max="365" name="days" value="{{ cfg.days }}"></label>
+        <label class="field" style="margin-top:8px"><span>«Скоро срок», если осталось дней не больше</span><input type="number" min="0" max="60" name="warn_days" value="{{ cfg.warn_days }}"></label>
+        <label class="field" style="margin-top:8px"><span>Признак доставки Door to door в столбце «Транспортировка» (часть текста)</span><input type="text" name="d2d" value="{{ cfg.d2d }}"></label>
+      </div>
+    </div>
+    <p style="margin-top:10px"><button class="btn primary" type="submit">Сохранить</button></p>
+  </form>
+</details>

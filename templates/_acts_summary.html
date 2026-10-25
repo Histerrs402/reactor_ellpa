@@ -1,0 +1,97 @@
+<div class="kpis m10">
+  {% for k in ORDER %}{% set label, cls = STATES[k] %}
+  <a class="kpi {{ 'alert' if k == 'late' and counts.get(k) }} {{ 'sel' if st == k }}" href="{{ url_with(ast=None if st == k else k) }}">
+    <div class="label">{{ label }}</div><div class="value">{{ counts.get(k, 0)|n }}</div></a>
+  {% endfor %}
+</div>
+<p class="small muted acts-diag">В разделе: <b>{{ n_rows|n }}</b>{% if diag.api %} (из них по данным API трекинга: {{ diag.api|n }}){% endif %}.
+  В выгрузке портала ремонтов с актом АНРП/АТО: {{ diag.with_act|n }}, из них уже в «Отчет»: {{ diag.closed|n }}
+  {%- if diag.with_act and diag.with_act == diag.closed %} — по открытым ремонтам выгрузка акты не показывает{% if not tcfg.enabled %}, поэтому нужна проверка через API трекинга (ниже){% endif %}{% endif %}.</p>
+<div class="card acts-api" id="api">
+  <div class="card-head"><h2>Акты через API трекинга</h2>
+    <span class="muted small">GetANRPInfo / GetATOInfo по номеру ET — для ремонтов, у которых в выгрузке портала акта нет</span></div>
+  {% if not tcfg.enabled %}
+    <p class="small">Сейчас выключено. Отчёт портала, похоже, показывает акт только у ремонтов, которые уже в «Отчет»,
+      поэтому утверждённые акты по открытым ремонтам программа может узнать только у трекинга — по каждому ремонту отдельно.
+      Включите проверку в настройках ниже и нажмите «Сохранить и проверить подключение».</p>
+  {% elif tjob.running %}
+    <div class="progress"><div id="tj-bar" style="width:{{ (100 * tjob.done / tjob.total)|round(1) if tjob.total else 0 }}%"></div></div>
+    <div class="btn-row"><span class="small" id="tj-text">{{ tjob.message }}: {{ tjob.done }} из {{ tjob.total }}, найдено актов {{ tjob.found }}{% if tjob.errors %}, ошибок {{ tjob.errors }}{% endif %}</span>
+      <form method="post" action="{{ url_for('acts_check_stop') }}"><input type="hidden" name="back" value="{{ request.full_path }}">
+        <button class="btn small" type="submit">Остановить</button></form></div>
+    <script>(function () { function poll() { fetch('{{ url_for('acts_check_status') }}').then(function (r) { return r.json(); }).then(function (s) {
+      if (!s.running) { location.reload(); return; }
+      document.getElementById('tj-bar').style.width = (s.total ? 100 * s.done / s.total : 0) + '%';
+      document.getElementById('tj-text').textContent = s.message + ': ' + s.done + ' из ' + s.total + ', найдено актов ' + s.found + (s.errors ? ', ошибок ' + s.errors : '');
+      setTimeout(poll, 1500); }).catch(function () { setTimeout(poll, 3000); }); } setTimeout(poll, 1500); })();</script>
+  {% else %}
+    <p class="small">
+      {% if tinfo %}Последняя проверка: <b>{{ tinfo.at|dt }}</b> — проверено ремонтов {{ tinfo.done|n }}{% if tinfo.total and tinfo.total != tinfo.done %} из {{ tinfo.total|n }}{% endif %},
+        с актом {{ tinfo.found|n }}{% if tinfo.errors %}, ошибок {{ tinfo.errors|n }}{% endif %}.
+        {% if tinfo.status == 'error' %}<br><b style="color:var(--high)">Ошибка: {{ tinfo.message }}</b>{% elif tinfo.status == 'stopped' %} Проверка была остановлена.{% endif %}
+      {% else %}Проверок ещё не было.{% endif %}
+      В памяти программы ответы по {{ diag.checked|n }} ремонтам; в разделе из API: {{ diag.api|n }}.
+      {% if tcfg.auto %}Проверка запускается сама после каждого «Обновить данные».{% endif %}</p>
+    <div class="btn-row">
+      <form method="post" action="{{ url_for('acts_check_start') }}"><input type="hidden" name="back" value="{{ request.full_path }}">
+        <button class="btn primary small" type="submit" title="Новые ремонты, изменившиеся, с неутверждённым актом и не проверявшиеся {{ tcfg.recheck_hours }} ч">Проверить сейчас</button></form>
+      <form method="post" action="{{ url_for('acts_check_start') }}"><input type="hidden" name="back" value="{{ request.full_path }}"><input type="hidden" name="full" value="1">
+        <button class="btn small" type="submit" title="Спросить трекинг по всем открытым ремонтам заново (дольше)">Проверить все заново</button></form>
+    </div>
+  {% endif %}
+  {% if ttest %}
+    <div class="note {{ '' if ttest.ok else 'error' }}" style="margin-top:10px">
+    {% if ttest.ok %}<b>Подключение работает</b> ({{ ttest.url }}{% if ttest.insecure %}, <b>без шифрования</b>{% endif %}): вход за {{ ttest.login_s }} с.
+      {% if ttest.et or ttest.act_query %}<br>{{ ttest.et or ('акт ' ~ ttest.act_query) }}:
+        {% for k, label in [('anrp', 'АНРП'), ('ato', 'АТО')] %}{% set a = ttest[k] %}
+          {{ label }} — {% if a %}<b>{{ a.id }}</b> от {{ a.created|d }}, {% if a.ok %}утверждён {{ a.approved|dt }}{% else %}не утверждён{% endif %}{% if a.conclusion %}, заключение {{ a.conclusion }}{% endif %}{% if a.note %} ({{ a.note }}){% endif %}{% else %}нет{% endif %}{{ ';' if loop.first }}
+        {% endfor %} <span class="muted small">({{ ttest.act_s }} с)</span>{% endif %}
+      {% if ttest.diag %}<details class="small" style="margin-top:6px" open><summary>Что ответил трекинг</summary>
+        {% for d in ttest.diag %}<div><code>{{ d.call }}</code> — {{ d.answer }} <span class="muted">({{ d.s }} с)</span></div>{% endfor %}</details>{% endif %}
+    {% else %}<b>Не получилось</b> ({{ ttest.url }}): {{ ttest.error }}{% if ttest.hint %}<br>{{ ttest.hint }}{% endif %}{% endif %}
+    </div>
+  {% endif %}
+  <details class="m10-set" style="padding:10px 0 0" {{ 'open' if not tcfg.enabled or (ttest and not ttest.ok) }}>
+    <summary><b>Настройки проверки актов</b>{% if tcfg.insecure %} <span class="badge high">адрес без шифрования (http)</span>{% endif %}</summary>
+    <form method="post" action="{{ url_for('acts_api_settings') }}" autocomplete="off">
+      <input type="hidden" name="back" value="{{ request.full_path }}">
+      <div class="grid2" style="margin-top:10px">
+        <div>
+          <label class="check"><input type="checkbox" name="enabled" value="1" {{ 'checked' if tcfg.enabled }}> <b>Проверять акты через API трекинга</b></label><br>
+          <label class="check"><input type="checkbox" name="auto" value="1" {{ 'checked' if tcfg.auto }}> сразу после каждого «Обновить данные»</label>
+          <label class="field" style="margin-top:8px"><span>Адрес сервиса</span>
+            <input type="text" name="url" value="{{ tcfg.url }}" style="width:100%"></label>
+          <p class="small muted" style="margin:4px 0 0">По умолчанию — защищённый адрес {{ SECURE_URL }}. В инструкции указан {{ DOC_URL }}:
+            по нему логин и пароль идут <b>без шифрования</b> — используйте его, только если https не работает и это допустимо.</p>
+          <label class="field" style="margin-top:8px"><span>Логин (пусто — как для портала{% if api_login %}: {{ api_login }}{% endif %})</span>
+            <input type="text" name="login" value="{{ tcfg.login }}" autocomplete="off"></label>
+          <label class="field" style="margin-top:8px"><span>Пароль (пусто — как для портала)</span>
+            <input type="password" name="password" value="" autocomplete="new-password" placeholder="{{ 'свой пароль сохранён — введите, чтобы заменить' if tcfg.password else 'как для портала' }}"></label>
+          {% if tcfg.password %}<label class="check"><input type="checkbox" name="clear_password" value="1"> свой пароль удалить (брать как для портала)</label>{% endif %}
+        </div>
+        <div>
+          <label class="field"><span>Одновременных запросов (1–8)</span><input type="number" min="1" max="8" name="workers" value="{{ tcfg.workers }}"></label>
+          <label class="field" style="margin-top:8px"><span>Ремонты без акта перепроверять не чаще, чем раз в N часов (если ремонт не менялся)</span>
+            <input type="number" min="0" max="720" name="recheck_hours" value="{{ tcfg.recheck_hours }}"></label>
+          <div class="field" style="margin-top:8px"><span>Не проверять ремонты в статусе</span>
+            {% for st in ['Заявка', 'Выезд/Доставка'] %}<label class="check" style="margin-right:10px"><input type="checkbox" name="skip_statuses" value="{{ st }}" {{ 'checked' if st in tcfg.skip_statuses }}> {{ st }}</label>{% endfor %}</div>
+          <label class="field" style="margin-top:8px"><span>Ремонт (ET…) или номер акта (NSE…, ATO…) для проверки подключения</span>
+            <input type="text" name="test_et" value="" placeholder="ET3037516 или номер акта NSE705150"></label>
+        </div>
+      </div>
+      <p class="small muted">Утверждённый акт больше не перепроверяется; акт без утверждения — при каждой проверке;
+        ремонт без акта — если изменился (ДатаИзменения) или прошло N часов. Пароль хранится зашифрованным (Windows).</p>
+      <div class="btn-row"><button class="btn primary" type="submit" name="then" value="test">Сохранить и проверить подключение</button>
+        <button class="btn" type="submit">Сохранить</button></div>
+    </form>
+  </details>
+</div>
+<details class="card m10-set">
+  <summary><b>Настройки раздела</b> <span class="muted small">— «долго не в «Отчет»» с {{ cfg.days }} дн. после утверждения</span></summary>
+  <form method="post" action="{{ url_for('acts_settings') }}">
+    <input type="hidden" name="back" value="{{ request.full_path }}">
+    <label class="field" style="margin-top:10px;max-width:420px"><span>Сколько дней после утверждения акта — уже долго (0 — сразу все)</span>
+      <input type="number" min="0" max="365" name="days" value="{{ cfg.days }}"></label>
+    <p style="margin-top:10px"><button class="btn primary" type="submit">Сохранить</button></p>
+  </form>
+</details>

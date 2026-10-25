@@ -1,0 +1,113 @@
+{% extends "base.html" %}
+{% from "macros.html" import filter_bar, trk with context %}
+{% block title %}Где застряли ремонты{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div><h1>Где застряли ремонты</h1>
+    <p>Для каждого статуса задайте, сколько дней — уже много. Здесь будут все ремонты, которые находятся в этом статусе
+      столько дней и больше (календарные дни на момент данных {{ as_of|dt }}). Закрытые («Отчет»){% if cfg.skip_demo %} и демо{% endif %} не учитываются.</p></div>
+  <div class="btn-row"><a class="btn" href="{{ url_with(export='xlsx') }}">Выгрузить в Excel</a></div>
+</div>
+
+{% call filter_bar(f, opts, url_for('stuck_page'), show_q=False) %}
+  {% if sel_cat %}<input type="hidden" name="cat" value="{{ sel_cat }}">{% endif %}
+  {% if sel_asc %}<input type="hidden" name="asc_sel" value="{{ sel_asc }}">{% endif %}
+{% endcall %}
+
+<form class="card tight" method="post" action="{{ url_for('stuck_settings_save') }}">
+  <input type="hidden" name="back" value="{{ request.full_path }}">
+  <details class="fold" id="thr-fold">
+  <summary class="card-head" title="Нажмите, чтобы свернуть или развернуть"><h2>Пороги по статусам</h2>
+    <span class="muted small"><span class="if-closed">зависли {{ n_ets|n }} ремонтов · нажмите, чтобы открыть пороги</span><span class="if-open">нажмите на число зависших, чтобы показать только их · на заголовок — свернуть</span></span></summary>
+  <script>(function () { var d = document.getElementById('thr-fold');
+    try { if (localStorage.getItem('rm_thr_open') === '1') d.open = true; } catch (e) {}
+    d.addEventListener('toggle', function () { try { localStorage.setItem('rm_thr_open', d.open ? '1' : '0'); } catch (e) {} }); })();</script>
+  <div class="tbl-wrap"><table class="tbl thr">
+    <tr><th>Статус</th><th class="num">Сейчас в статусе</th><th>Контролировать</th><th>Сколько дней — уже много</th><th class="num">Зависли</th></tr>
+    {% for st in statuses %}{% set on, days = rules_of(st) %}{% set cat = 'st:' ~ st %}
+    <tr class="{{ 'sel' if sel_cat == cat }} {{ 'off' if not on }}">
+      <td><input type="hidden" name="st_{{ loop.index0 }}" value="{{ st }}"><b>{{ st }}</b></td>
+      <td class="num">{{ in_status.get(st, 0)|n }}</td>
+      <td><label class="check"><input type="checkbox" name="on_{{ loop.index0 }}" value="1" {{ 'checked' if on }}> да</label></td>
+      <td><input type="number" min="0" name="days_{{ loop.index0 }}" value="{{ days }}"> дн. и больше</td>
+      <td class="num">{% if on and stuck_n.get(cat) %}<a class="cnt" href="{{ url_with(cat=None if sel_cat == cat else cat) }}">{{ stuck_n[cat]|n }}</a>{% elif on %}<span class="muted">0</span>{% else %}<span class="muted">—</span>{% endif %}</td>
+    </tr>
+    {% endfor %}
+    <tr class="{{ 'sel' if sel_cat == ACC }} {{ 'off' if not cfg.accepted.on }} acc">
+      <td><b>Принята АСЦ, нет диагностики</b><span class="sub muted small">по дате приёма техники; статус ещё
+        {% for st in ['Заявка', 'Выезд/Доставка', 'Диагностика'] %}<label class="check" style="margin-left:6px"><input type="checkbox" name="acc_statuses" value="{{ st }}" {{ 'checked' if st in cfg.accepted.statuses }}> {{ st }}</label>{% endfor %}</span></td>
+      <td></td>
+      <td><label class="check"><input type="checkbox" name="acc_on" value="1" {{ 'checked' if cfg.accepted.on }}> да</label></td>
+      <td><input type="number" min="0" name="acc_days" value="{{ cfg.accepted.days }}"> дн. с приёма и больше</td>
+      <td class="num">{% if cfg.accepted.on and stuck_n.get(ACC) %}<a class="cnt" href="{{ url_with(cat=None if sel_cat == ACC else ACC) }}">{{ stuck_n[ACC]|n }}</a>{% elif cfg.accepted.on %}<span class="muted">0</span>{% else %}<span class="muted">—</span>{% endif %}</td>
+    </tr>
+  </table></div>
+  <input type="hidden" name="n_st" value="{{ statuses|length }}">
+  <div class="btn-row" style="padding:10px 16px 14px">
+    <button class="btn primary" type="submit">Сохранить пороги</button>
+    <label class="check"><input type="checkbox" name="skip_demo" value="1" {{ 'checked' if cfg.skip_demo }}> не учитывать демо</label>
+  </div>
+  </details>
+</form>
+
+<div class="grid2 stuck-grid">
+  <div class="card tight">
+    <div class="card-head" style="padding:14px 16px 0"><h2>АСЦ с зависшими ремонтами</h2>
+      <span class="muted small">{{ ranking|length }} АСЦ, {{ n_ets|n }} ремонтов; нажмите на АСЦ — появится готовое письмо</span></div>
+    <div class="tbl-wrap" style="max-height:560px;overflow:auto"><table class="tbl rank">
+      <tr><th>АСЦ</th><th class="num">Ремонтов</th><th>По статусам</th><th class="num">Макс. дн.</th></tr>
+      {% for d in ranking %}
+      <tr class="{{ 'sel' if sel_asc == d.asc }}">
+        <td><a href="{{ url_with(asc_sel=None if sel_asc == d.asc else d.asc) }}">{{ d.asc }}</a>{% if d.cities %}<span class="sub muted small">{{ d.cities }}</span>{% endif %}</td>
+        <td class="num"><b>{{ d.total }}</b></td>
+        <td class="small">{% for c, n in d.breakdown %}<span class="bk">{{ cat_label(c) }}: <b>{{ n }}</b></span>{% endfor %}</td>
+        <td class="num">{{ d.max_days }}</td>
+      </tr>
+      {% else %}<tr><td colspan="4" class="muted">Зависших ремонтов нет.</td></tr>{% endfor %}
+    </table></div>
+  </div>
+
+  <div class="card">
+    {% if msg %}
+      <div class="card-head"><h2>Письмо в АСЦ</h2><a class="small" href="{{ url_with(asc_sel=None) }}">закрыть</a></div>
+      <p class="muted small">«{{ sel_asc }}»{% if sel_cat %}, только «{{ cat_label(sel_cat) }}»{% endif %}: {{ msg.ets|length }} ремонтов. Скопируйте тему и текст в письмо или откройте его сразу в почте.</p>
+      {% include "_mail.html" %}
+    {% else %}
+      <h2>Письмо в АСЦ</h2>
+      <p class="muted">Выберите АСЦ в таблице слева — здесь появятся тема и текст письма со списком его зависших ремонтов
+        (номер ET, модель, что не так, сколько дней, договорный срок, если он подходит или просрочен).</p>
+    {% endif %}
+  </div>
+</div>
+
+<div class="card tight">
+  <div class="card-head" style="padding:14px 16px 0"><h2>Ремонты{% if sel_asc %} — {{ sel_asc }}{% endif %}{% if sel_cat %} — {{ cat_label(sel_cat) }}{% endif %}</h2>
+    <span class="muted small">строк: <b id="cf-shown">{{ rows|length }}</b><span id="cf-of" hidden> из {{ rows|length }}</span> · с комментарием: <b id="cf-cm">{{ rows|selectattr('it.last_comment')|list|length }}</b>; сначала самые долгие{% if sel_cat or sel_asc %} · <a href="{{ url_with(cat=None, asc_sel=None) }}">показать все</a>{% endif %}</span></div>
+  <p class="small muted" style="padding:0 16px">Комментарий пишется прямо в строке и сохраняется сразу — тот же, что в «Листе» (по номеру ET).
+    Enter — сохранить и перейти ниже, Shift+Enter — новая строка, Esc — отменить правку. Зелёным — ремонты с комментарием.
+    Строка под заголовками — фильтр по столбцу (часть номера, АСЦ, город, слово из комментария; «(пусто)» — пустые); выгрузка в Excel его учитывает.</p>
+  <div class="note error" id="save-banner" hidden style="margin:0 16px 8px"></div>
+  <div class="tbl-wrap stuck-wrap"><table class="tbl stucktab" id="stuck-tbl">
+    <thead>
+    <tr>{% for c in stuck_cols %}<th class="{{ 'num' if loop.index0 == 5 }}">{{ c }}</th>{% endfor %}</tr>
+    <tr class="frow">{% for c in stuck_cols %}<th><input class="cf" data-idx="{{ loop.index0 }}" value="{{ request.args.get('cf' ~ loop.index0, '') }}" placeholder="фильтр" aria-label="Фильтр: {{ c }}"></th>{% endfor %}</tr>
+    </thead>
+    <tbody>
+    {% for r in rows %}{% set i = r.it %}{% set tx = stuck_texts(r) %}
+    <tr class="{{ 'has-cm' if i.last_comment }}">
+      <td data-f="{{ tx[0] }}"><span class="badge {{ 'neutral' if r.cat == ACC else 'medium' }}">{{ cat_label(r.cat) }}</span></td>
+      <td data-f="{{ tx[1] }}" class="nowrap"><a class="et" href="{{ url_for('repair', et=i.et) }}">{{ i.et }}</a> {{ trk(i) }}<span class="sub muted small">{{ i.model or '' }}</span></td>
+      <td data-f="{{ tx[2] }}">{{ i.asc or '—' }}</td>
+      <td data-f="{{ tx[3] }}">{{ i.city or '—' }}</td>
+      <td data-f="{{ tx[4] }}" class="nowrap">{{ r.since|d }}<span class="sub muted small">{{ r.since_label }}{% if r.cat == ACC %}, статус «{{ i.status }}»{% endif %}</span></td>
+      <td data-f="{{ tx[5] }}" class="num"><b>{{ '≥ ' if r.lb }}{{ r.days }}</b></td>
+      {% set lc = i.last_comment %}<td data-f="{{ tx[6] }}" class="cmcell"><textarea class="cm" rows="2" data-et="{{ i.et }}" spellcheck="true" placeholder="+ комментарий"
+        title="{% if lc %}{{ lc.text }}&#10;— изменён {{ lc.created_at|dt }}{% else %}Напишите комментарий — он сохранится по номеру {{ i.et }}{% endif %}">{{ lc.text if lc else '' }}</textarea><span class="cm-date tag-src">{{ lc.created_at|d if lc else '' }}</span></td>
+    </tr>
+    {% else %}<tr><td colspan="7" class="muted">Ничего не найдено.</td></tr>{% endfor %}
+    <tr class="cf-none" hidden><td colspan="7" class="muted">По фильтрам под заголовками ничего не найдено.</td></tr>
+    </tbody>
+  </table></div>
+</div>
+{% endblock %}
+{% block scripts %}<script>initStuckTable({{ author|tojson }});</script>{% endblock %}

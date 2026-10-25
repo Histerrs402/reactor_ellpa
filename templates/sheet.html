@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+{% from "macros.html" import filter_bar, tat, presence as presence_badge, trk with context %}
+{% block title %}{{ page_title or 'Лист' }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div><h1>{{ page_title or 'Лист' }}</h1>
+    {% if page_intro %}<p>{{ page_intro|safe }}</p>{% else %}
+    <p>Как ваш лист DL_GR_open_reps: комментарий пишется прямо в строке и сохраняется сразу — по номеру ET, а не по строке.
+      Ремонт ушёл в «Отчет» или пропал из выгрузки — комментарий остаётся и вернётся вместе с ним.</p>{% endif %}</div>
+  <div class="btn-row">
+    <a class="btn" id="export-link" href="{{ url_with(export='xlsx') }}">Выгрузить лист в Excel</a>
+    <a class="btn" href="{{ url_for('comments_export') }}" title="Все текущие комментарии (лист Comments_DB: Repair / Comment) и полная история правок">Выгрузить комментарии</a>
+  </div>
+</div>
+
+{% if before_filters %}{{ before_filters|safe }}{% endif %}
+{% call filter_bar(f, opts, action_url or url_for('sheet'), show_presence=True) %}
+  {% for sel in extra_selects or [] %}
+  <label class="field"><span>{{ sel.label }}</span>
+    <select name="{{ sel.name }}">{% for v, l in sel.options %}<option value="{{ v }}" {{ 'selected' if sel.value == v }}>{{ l }}</option>{% endfor %}</select></label>
+  {% endfor %}
+  {% if not extra_selects %}
+  <label class="field"><span>Комментарий</span>
+    <select name="cm">
+      <option value="">Все</option>
+      <option value="with" {{ 'selected' if cmf == 'with' }}>С комментарием</option>
+      <option value="without" {{ 'selected' if cmf == 'without' }}>Без комментария</option>
+    </select></label>
+  <label class="field"><span>Договорный срок</span>
+    <select name="cst">
+      <option value="">Все</option>
+      <option value="soon" {{ 'selected' if cst == 'soon' }}>Скоро срок</option>
+      <option value="overdue" {{ 'selected' if cst == 'overdue' }}>Просрочен</option>
+      <option value="both" {{ 'selected' if cst == 'both' }}>Скоро или просрочен</option>
+    </select></label>
+  {% endif %}
+{% endcall %}
+{% if after_filters %}{{ after_filters|safe }}{% endif %}
+
+<div class="note error" id="save-banner" hidden></div>
+
+<p class="small muted sheet-info">Строк: <b id="shown">{{ total|n }}</b>{% if total %} из {{ total|n }}{% endif %} · с комментарием: <b id="n-cm">{{ n_comments|n }}</b>.
+  Enter — сохранить и перейти ниже, Shift+Enter — новая строка, Esc — отменить правку. Заголовок — сортировка, строка под ним — фильтр по столбцу
+  («(пусто)» — пустые). Галочки слева — выбрать ремонты и составить письмо в АСЦ.</p>
+
+<div class="sheet-wrap">
+<table class="sheet" id="sheet" data-sort="{{ sidx }}" data-dir="{{ 'desc' if sdesc else 'asc' }}" data-mail-mode="{{ mail_mode or '' }}"
+  style="width:{{ cols|sum(attribute='width') + 330 }}px">
+  <colgroup><col style="width:30px">{% for c in cols %}<col style="width:{{ c.width }}px">{% endfor %}<col style="width:300px"></colgroup>
+  <thead>
+    <tr>
+      <th class="pickcol"><input type="checkbox" id="pick-all" title="Выбрать все видимые строки"></th>
+      {% for c in cols %}<th class="{{ 'num' if c.num }} {{ 'tatcol' if c.kind == 'tat' or c.tat_style }} {{ 'pin2' if (c.kind == 'tat' or c.pin) and loop.last }} {{ 'pinr' if c.pin_right }}" {% if c.pin_right %}style="right:{{ c.pin_right }}px"{% endif %} data-idx="{{ loop.index0 }}" title="{{ c.name }}"><button type="button" class="sh">{{ c.name }}<span class="arr">{% if sidx == loop.index0 %}{{ '↓' if sdesc else '↑' }}{% endif %}</span></button></th>{% endfor %}
+      <th class="cmcol" data-idx="{{ cols|length }}"><button type="button" class="sh">комментарий<span class="arr">{% if sidx == cols|length %}{{ '↓' if sdesc else '↑' }}{% endif %}</span></button></th>
+    </tr>
+    <tr class="frow">
+      <th class="pickcol"></th>
+      {% for c in cols %}<th class="{{ 'pin2' if (c.kind == 'tat' or c.pin) and loop.last }} {{ 'pinr' if c.pin_right }}" {% if c.pin_right %}style="right:{{ c.pin_right }}px"{% endif %}><input class="cf" data-idx="{{ loop.index0 }}" value="{{ request.args.get('cf' ~ loop.index0, '') }}" placeholder="фильтр"></th>{% endfor %}
+      <th><input class="cf" data-idx="{{ cols|length }}" value="{{ request.args.get('cf' ~ cols|length, '') }}" placeholder="фильтр"></th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for r in rows %}{% set i = r.it %}
+    <tr data-et="{{ i.et }}" class="{{ 'has-cm' if r.comment }} {{ 'gone' if not i.present }}">
+      <td class="pickcell"><input type="checkbox" class="pick" value="{{ i.et }}" title="Выбрать для письма в АСЦ"></td>
+      {% for c in cols %}{% set cell = r.cells[loop.index0] %}
+        {% if c.kind == 'et' %}<td data-k="{{ cell.key }}" class="nowrap"><a href="{{ url_for('repair', et=i.et) }}" title="{{ i.status or '' }}{% if i.demo %} · демо{% endif %}">{{ i.et }}</a> {{ trk(i) }}{% if not i.current %} {{ presence_badge(i) }}{% endif %}</td>
+        {% elif c.kind == 'tat' %}<td data-k="{{ cell.key }}" class="num tatcol {{ 'pin2' if loop.last }}">{{ tat(i) }}</td>
+        {% else %}<td data-k="{{ cell.key }}" class="{{ 'num' if c.num }} {{ 'tatcol' if c.tat_style }} {{ 'pin2' if c.pin and loop.last }} {{ 'pinr' if c.pin_right }} {{ cell.cls or '' }}" {% if c.pin_right %}style="right:{{ c.pin_right }}px"{% endif %} {% if cell.title or cell.text|length > 28 %}title="{{ cell.title or cell.text }}"{% endif %}>{% if cell.html %}{{ cell.html|safe }}{% else %}{{ cell.text }}{% endif %}</td>{% endif %}
+      {% endfor %}
+      <td class="cmcell" data-k="{{ r.comment|lower }}"><textarea class="cm" rows="1" data-et="{{ i.et }}" spellcheck="true"
+        title="{% if r.comment %}{{ r.comment }}&#10;— изменён {{ r.comment_at|dt }}{% if r.comment_by %}, {{ r.comment_by }}{% endif %}{% else %}Напишите комментарий — он сохранится по номеру {{ i.et }}{% endif %}">{{ r.comment }}</textarea></td>
+    </tr>
+  {% else %}
+    <tr><td colspan="{{ cols|length + 2 }}" class="muted">Ничего не найдено. Измените фильтры.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+
+<div class="pickbar" id="pickbar" hidden>
+  Выбрано ремонтов: <b id="pick-n">0</b>
+  <button class="btn primary small" type="button" id="pick-mail">Письмо в АСЦ</button>
+  <button class="btn small" type="button" id="pick-clear">Снять выбор</button>
+</div>
+
+<dialog id="mail-dlg" class="mail-dlg">
+  <div class="dlg-head"><h2>Письмо в АСЦ</h2><button class="btn small" type="button" id="dlg-close">Закрыть</button></div>
+  <p class="muted small">По одному письму на каждый АСЦ. Скопируйте тему и текст или откройте письмо сразу в почте (адрес АСЦ впишите сами).</p>
+  <div id="mail-list"></div>
+</dialog>
+{% endblock %}
+{% block scripts %}<script>initSheet({{ author|tojson }});</script>{% endblock %}

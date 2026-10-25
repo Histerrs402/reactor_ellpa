@@ -1,0 +1,92 @@
+{% extends "base.html" %}
+{% from "macros.html" import filter_bar with context %}
+{% block title %}Аналитика{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div><h1>Аналитика</h1>
+    <p>Узкие места процесса по статусам и АСЦ. Ремонтов в выборке: <b>{{ n_items|n }}</b>.
+      Выборки меньше {{ small }} ремонтов помечены — по ним выводы ненадёжны.</p></div>
+</div>
+{{ filter_bar(f, opts, url_for('analytics_page'), show_q=False) }}
+
+<div class="grid2">
+  <div class="card">
+    <div class="card-head"><h2>Где чаще всего зависают ремонты</h2><span class="muted small">число ремонтов дольше порога, по статусам</span></div>
+    {{ stuck_chart }}
+  </div>
+  <div class="card">
+    <div class="card-head"><h2>Динамика</h2><span class="muted small">по загрузкам; значения фиксируются в момент загрузки по действовавшим тогда настройкам</span></div>
+    {{ dyn_chart }}
+    {% if dyn|length >= 1 %}
+    <details class="table-view"><summary>Таблица</summary>
+      <table class="tbl"><tr><th>Срез</th><th class="num">Всего</th><th class="num">С предупр.</th><th class="num">Дольше порога</th><th class="num">Просрочен срок</th><th class="num">Исчезли, не подтв.</th><th class="num">Новых</th></tr>
+      {% for p in dyn|reverse %}<tr><td>{{ p.snapshot_at|dt }}</td><td class="num">{{ p.total|n }}</td><td class="num">{{ p.problem|n }}</td><td class="num">{{ p.stuck|n }}</td><td class="num">{{ p.overdue|n }}</td><td class="num">{{ p.disappeared_unconfirmed|n }}</td><td class="num">{{ p.new|n }}</td></tr>{% endfor %}
+      </table></details>
+    {% endif %}
+  </div>
+</div>
+
+<div class="card tight">
+  <div class="card-head" style="padding:14px 16px 0"><h2>Время в текущем статусе</h2>
+    <span class="muted small">по дате входа в статус из выгрузки; ремонты ещё в статусе (незавершённые пребывания)</span></div>
+  <div class="tbl-wrap"><table class="tbl">
+    <tr><th>Статус</th><th class="num">Ремонтов</th><th class="num">С датой статуса</th><th class="num">Медиана, дн.</th><th class="num">Среднее, дн.</th><th class="num">90-й перцентиль</th><th class="num">Максимум</th><th class="num">Порог</th><th class="num">Дольше порога</th><th class="num">Доля</th></tr>
+    {% for r in st %}
+    <tr>
+      <td><a href="{{ link('repairs', status=r.status) }}">{{ r.status }}</a></td>
+      <td class="num">{{ r.n|n }}</td>
+      <td class="num">{{ r.n_days|n }}{% if r.n_detected %} <span class="muted small" title="без даты статуса в выгрузке">(+{{ r.n_detected }})</span>{% endif %}</td>
+      <td class="num">{{ r.median|f1 }}</td><td class="num">{{ r.mean|f1 }}</td><td class="num">{{ r.p90|f1 }}</td><td class="num">{{ r.max|n }}</td>
+      <td class="num">{% if r.threshold is not none %}{{ r.threshold }}{% else %}<span class="muted small">{{ r.threshold_rule }}</span>{% endif %}</td>
+      {% if r.threshold is none %}<td class="num muted">—</td><td class="num muted">—</td>{% else %}
+      <td class="num">{% if r.stuck %}<a href="{{ link('attention', status=r.status, reason='stuck') }}">{{ r.stuck|n }}</a>{% else %}0{% endif %}</td>
+      <td class="num">{{ r.stuck_share|pct }}</td>{% endif %}
+    </tr>
+    {% endfor %}
+  </table></div>
+</div>
+
+<div class="card tight">
+  <div class="card-head" style="padding:14px 16px 0"><h2>Завершённые пребывания в статусах</h2>
+    <span class="muted small">от входа в статус до входа в следующий; только смены, обнаруженные программой, где обе даты есть в выгрузке</span></div>
+  {% if tr %}
+  <div class="tbl-wrap"><table class="tbl">
+    <tr><th>Статус</th><th class="num">Обнаружено смен</th><th class="num">С обеими датами</th><th class="num">Медиана, дн.</th><th class="num">Среднее, дн.</th><th class="num">90-й перцентиль</th><th></th></tr>
+    {% for r in tr %}<tr><td>{{ r.status }}</td><td class="num">{{ r.n_all|n }}</td><td class="num">{{ r.n|n }}</td>
+      <td class="num">{{ r.median|f1 }}</td><td class="num">{{ r.mean|f1 }}</td><td class="num">{{ r.p90|f1 }}</td>
+      <td>{% if r.small %}<span class="badge neutral">мало данных</span>{% endif %}</td></tr>{% endfor %}
+  </table></div>
+  {% else %}
+  <p style="padding:0 16px 14px" class="muted">Недостаточно данных: смены статусов появятся после нескольких загрузок выгрузки. До этого используйте таблицу «Время в текущем статусе».</p>
+  {% endif %}
+</div>
+
+<div class="card tight">
+  <div class="card-head" style="padding:14px 16px 0"><h2>АСЦ</h2>
+    <span class="muted small">в среднем по выборке: с предупреждениями {{ asc.problem_share|pct }}, дольше порога {{ asc.stuck_share|pct }}</span></div>
+  <p class="muted small" style="padding:0 16px">Сравнивайте доли, а не количество: у крупного АСЦ больше заявок и, естественно, больше предупреждений. При малой выборке доля может случайно оказаться большой.</p>
+  <div class="tbl-wrap"><table class="tbl">
+    <tr>
+      {% for key, label, cls in [('name','АСЦ',''),('n','Ремонтов','num'),('stuck','Дольше порога','num'),('stuck_share','Доля','num'),('problem','С предупреждениями','num'),('problem_share','Доля','num'),('median','Медиана дней в статусе','num')] %}
+      <th class="{{ cls }}"><a class="{{ 'sorted' if asc_sort == key }}" href="{{ url_with(asc_sort=key) }}">{{ label }}{% if asc_sort == key %} ↓{% endif %}</a></th>
+      {% endfor %}
+      <th class="num">Просрочен срок</th><th></th>
+    </tr>
+    {% for r in asc.rows %}
+    <tr>
+      <td><a href="{{ link('repairs', asc=r.asc) }}">{{ r.asc }}</a> <span class="muted small">{{ r.code }}</span></td>
+      <td class="num">{{ r.n|n }}</td>
+      <td class="num">{% if r.stuck %}<a href="{{ link('attention', asc=r.asc, reason='stuck') }}">{{ r.stuck|n }}</a>{% else %}0{% endif %}</td>
+      <td class="num">{{ r.stuck_share|pct }}</td>
+      <td class="num">{% if r.problem %}<a href="{{ link('attention', asc=r.asc) }}">{{ r.problem|n }}</a>{% else %}0{% endif %}</td>
+      <td class="num">{{ r.problem_share|pct }}</td>
+      <td class="num">{{ r.median_days|f1 }}</td>
+      <td class="num">{{ r.overdue|n }}</td>
+      <td>{% if r.small %}<span class="badge neutral" title="Меньше {{ small }} ремонтов">мало данных</span>{% endif %}</td>
+    </tr>
+    {% endfor %}
+  </table></div>
+  {% if asc.n_rows > asc.rows|length %}<p style="padding:8px 16px"><a href="{{ url_with(asc_all='1') }}">Показать все {{ asc.n_rows }} АСЦ</a></p>
+  {% elif asc_all and asc.n_rows > 40 %}<p style="padding:8px 16px"><a href="{{ url_with(asc_all=None) }}">Показать первые 40</a></p>{% endif %}
+</div>
+{% endblock %}

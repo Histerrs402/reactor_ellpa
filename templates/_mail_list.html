@@ -1,0 +1,6 @@
+{% for msg in msgs %}
+<div class="mail-wrap">
+  <h3>{{ msg.asc }} <span class="muted small">· код {{ msg.code or '—' }} · ремонтов: {{ msg.ets|length }}</span></h3>
+  {% include "_mail.html" %}
+</div>
+{% endfor %}
