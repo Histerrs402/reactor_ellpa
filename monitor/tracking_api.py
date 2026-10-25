@@ -23,6 +23,7 @@ import xml.etree.ElementTree as ET
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 from xml.sax.saxutils import escape
+import sqlite3
 
 from . import db, vault
 
@@ -180,26 +181,31 @@ EMPTY_LOGIN = re.compile(r"не могут быть пуст|can.?t be empty|can
 def get_ticket(cfg: dict) -> str:
     login, pwd = cfg.get("login_eff") or "", vault.reveal(cfg.get("password_eff"))
     if not login or not pwd:
-        raise TrackingError("Не указаны логин и пароль: впишите их в «Настройки → Источник данных → Портал» "
-                            "или в настройках проверки актов.")
-    # В сервисе метод объявлен как GetTicket(string login, string password) — имена с маленькой буквы
-    # (в таблице инструкции — Login / Password). Если сервис не увидит поля, пробуем второй вариант.
+        raise TrackingError("Не указаны логин и пароль: впишите их в «Настройки → Источник данных → Портал» или в настройках проверки актов.")
+    
+    safe_login = escape(str(login))
+    safe_pwd = escape(str(pwd))
+    
     try:
-        try:
-            res = call(cfg, "GetTicket", {"login": login, "password": pwd})
-        except TrackingError as e:
-            if not EMPTY_LOGIN.search(str(e)):
-                raise
-            res = call(cfg, "GetTicket", {"Login": login, "Password": pwd})
+        res = call(cfg, "GetTicket", {"Login": safe_login, "Password": safe_pwd})
+        t = next(((c.text or "").strip() for c in res.iter() if _local(c.tag) == "Ticket"), None)
+        if t is None: t = (res.text or "").strip()
+        if t: return t
     except TrackingError as e:
-        raise TrackingError(f"Вход в трекинг не удался. {e}") from None
-    # Ответ: <GetTicketResult><Ticket>…</Ticket><Version>…</Version></GetTicketResult>
-    t = next(((c.text or "").strip() for c in res.iter() if _local(c.tag) == "Ticket"), None)
-    if t is None:
-        t = (res.text or "").strip()
-    if not t:
-        raise TrackingError("Трекинг не выдал ключ: проверьте логин и пароль.")
-    return t
+        msg = str(e)
+        if not EMPTY_LOGIN.search(msg):
+            raise TrackingError(f"Вход в трекинг не удался (Вариант 1). {e}") from None
+
+    try:
+        res = call(cfg, "GetTicket", {"login": safe_login, "password": safe_pwd})
+        t = next(((c.text or "").strip() for c in res.iter() if _local(c.tag) == "Ticket"), None)
+        if t is None: t = (res.text or "").strip()
+        if t: return t
+    except TrackingError as e:
+        raise TrackingError(f"Вход в трекинг не удался (Вариант 2). {e}") from None
+
+    raise TrackingError("Трекинг не выдал сессионный ключ. Проверьте правильность логина/пароля в Настройках.")
+
 
 
 def _dt(v: str | None):
@@ -212,18 +218,35 @@ def _dt(v: str | None):
 
 def parse_result(res: ET.Element) -> dict | None:
     """Поля акта; None — акта нет."""
-    f = {_local(c.tag): (c.text or "").strip() for c in res}
-    act_id = f.get("ActId") or ""
+    if res is None:
+        return None
+        
+    f = {}
+    for c in res.iter():
+        tag_name = _local(c.tag)
+        f[tag_name] = (c.text or "").strip()
+    
+    # ВЫВОД В КОНСОЛЬ ДЛЯ АНАЛИЗА:
+    print(f"--- [API СТАТУС АКТА] uid: {f.get('uid')}, isApproved: {f.get('isApproved')}, CreateDate: {f.get('CreateDate')}, ApprovalDate: {f.get('ApprovalDate')}, ErrorText: {f.get('ErrorText')}")
+
+    act_id = f.get("ActId") or f.get("actID") or f.get("ActID") or f.get("uid") or f.get("TrackingUid") or ""
     if not act_id:
         return None
-    approved = f.get("isApproved", "").lower() == "true"
-    return {"id": act_id, "created": _dt(f.get("CreateDate")), "approved": _dt(f.get("ApprovalDate")) if approved else None,
+        
+    is_approved_str = str(f.get("isApproved", "")).lower()
+    approved = is_approved_str == "true" or is_approved_str == "1"
+    
+    created_date = _dt(f.get("CreateDate") or f.get("createDate"))
+    approval_date = _dt(f.get("ApprovalDate") or f.get("approvalDate")) if approved else None
+    
+    return {"id": act_id, "created": created_date, "approved": approval_date,
             "ok": approved, "note": f.get("ErrorText") or None, "conclusion": f.get("Conclusion") or None}
+
+
 
 
 DIAG_FIELDS = ("ActId", "TrackingId", "ASCCode", "ASCName", "isApproved", "CreateDate", "ApprovalDate",
                "Conclusion", "IsNoSystem", "ErrorText")
-
 
 def summary(res: ET.Element) -> str:
     """Что ответил трекинг (для проверки подключения): заполненные поля результата."""
@@ -231,6 +254,7 @@ def summary(res: ET.Element) -> str:
     parts = [f"{k}: {f[k]}" for k in DIAG_FIELDS if f.get(k) and not f[k].startswith("0001-01-01")
              and f[k] != "00000000-0000-0000-0000-000000000000"]
     return "; ".join(parts) or "все поля пустые"
+
 
 
 NOT_FOUND = re.compile(r"не найд|not found|отсутств|нет акт|does not exist", re.I)
@@ -245,16 +269,54 @@ class Session:
         self.lock = threading.Lock()
         self.ticket = None
 
+    def get_ticket(self) -> str:
+        login, pwd = self.cfg.get("login_eff") or "", vault.reveal(self.cfg.get("password_eff"))
+        if not login or not pwd:
+            raise TrackingError("Не указаны логин и пароль: впишите их в «Настройки → Источник данных → Портал» "
+                                "или в настройках проверки актов.")
+        
+        safe_login = escape(str(login))
+        safe_pwd = escape(str(pwd))
+        
+        try:
+            res = call(self.cfg, "GetTicket", {"Login": safe_login, "Password": safe_pwd})
+            t = next(((c.text or "").strip() for c in res.iter() if _local(c.tag) == "Ticket"), None)
+            if t is None: t = (res.text or "").strip()
+            if t: return t
+        except TrackingError as e:
+            msg = str(e)
+            if not EMPTY_LOGIN.search(msg):
+                raise TrackingError(f"Вход в трекинг не удался. {e}") from None
+
+        try:
+            res = call(self.cfg, "GetTicket", {"login": safe_login, "password": safe_pwd})
+            t = next(((c.text or "").strip() for c in res.iter() if _local(c.tag) == "Ticket"), None)
+            if t is None: t = (res.text or "").strip()
+            if t: return t
+        except TrackingError as e:
+            raise TrackingError(f"Вход в трекинг не удался. {e}") from None
+
+        raise TrackingError("Трекинг не выдал сессионный ключ. Проверьте правильность логина/пароля в Настройках.")
+
     def _ticket(self, renew: bool = False) -> str:
         with self.lock:
             if renew or not self.ticket:
-                self.ticket = get_ticket(self.cfg)
+                self.ticket = self.get_ticket()
             return self.ticket
 
     def act(self, kind: str, et: str | None = None, act_id: str | None = None, diag: list | None = None,
             uid: str | None = None) -> dict | None:
         method = METHODS[kind]
-        params = {"actId": act_id} if act_id else {"trackingUid": uid} if uid else {"trackingId": et}
+        
+        # Передаем строго по ОДНОМУ параметру в точном регистре WSDL Эллпы
+        params = {}
+        if act_id:
+            params["actID"] = act_id  # По ТЗ имя параметра для акта: actID
+        elif uid:
+            params["trackingUid"] = uid  # Имя параметра для GUID: trackingUid
+        else:
+            params["trackingId"] = et  # Имя параметра для ремонта: trackingId
+
         for attempt in (0, 1):
             t = self._ticket(renew=attempt == 1)
             t0 = time.time()
@@ -272,14 +334,56 @@ class Session:
                 if NOT_FOUND.search(msg) and not AUTH_FAULT.search(msg):
                     return None
                 if attempt == 0 and AUTH_FAULT.search(msg):
-                    continue  # ключ устарел — войти заново
+                    continue
                 raise
         return None
 
 
-def check_one(sess: Session, et: str) -> dict:
-    anrp = sess.act("anrp", et)
-    ato = None if (anrp and anrp["ok"]) else sess.act("ato", et)
+
+
+def check_one(sess: Session, item_obj: dict | str) -> dict:
+    anrp = None
+    ato = None
+    act_number = None
+    et = ""
+
+    # Поддерживаем оба варианта вызова (и строку, и словарь) для совместимости с ручным тестом
+    if isinstance(item_obj, dict):
+        et = item_obj.get("et", "")
+        act_number = item_obj.get("forced_act_number")
+    else:
+        et = str(item_obj)
+
+    # Если планировщик не передал принудительный номер акта (например, при ручном тесте), 
+    # быстро вытаскиваем его из базы данных ремонта по ET
+    if not act_number and et:
+        try:
+            from . import db
+            conn = db.connect()
+            row = conn.execute("SELECT anrp_number, act_number FROM repairs WHERE et = ? LIMIT 1", (et,)).fetchone()
+            if row:
+                val = row[0] or row[1]
+                if val and str(val).strip().lower() != 'none':
+                    act_number = str(val).strip().upper()
+            conn.close()
+        except Exception:
+            pass
+
+    # Отправляем запрос в SOAP только если у нас РЕАЛЬНО есть номер акта АНРП или АТО!
+    if act_number and act_number.lower() != 'none' and act_number != '':
+        if act_number.startswith("NSE"):
+            print(f"[API Авто] Фоновая проверка АНРП {act_number} для ремонта {et}...")
+            anrp = sess.act("anrp", act_id=act_number)
+        elif act_number.startswith(("ATO", "АТО")):
+            print(f"[API Авто] Фоновая проверка АТО {act_number} для ремонта {et}...")
+            ato = sess.act("ato", act_id=act_number)
+    else:
+        # Резервный фолбэк по ET (если это абсолютно голый ремонт без привязок)
+        if et:
+            anrp = sess.act("anrp", et=et)
+            if not (anrp and anrp["ok"]):
+                ato = sess.act("ato", et=et)
+            
     return {"anrp": anrp, "ato": ato}
 
 
@@ -355,30 +459,90 @@ def load_checks(conn) -> dict[str, dict]:
     return {r["et"]: dict(r) for r in conn.execute("SELECT * FROM act_checks")}
 
 
+# Создаем глобальный кэш в оперативной памяти прямо над функцией
+PROCESSED_CACHE = set()
+
 def candidates(items: list[dict], checks: dict, cfg: dict, now: datetime, full: bool = False) -> list[dict]:
-    """Открытые ремонты, которые пора спросить у трекинга. Уже утверждённый акт не перепроверяется;
-    акт без утверждения — при каждой проверке; ремонт без акта — если он изменился или прошло recheck_hours."""
-    skip = set(cfg.get("skip_statuses") or [])
-    hours = float(cfg.get("recheck_hours") or 0)
+    """
+    Универсальный сканер: собирает уникальные номера актов по всей базе,
+    но НАВСЕГДА исключает из проверки те документы, по которым Эллпа уже вернула
+    статус 'Утвержден' (isApproved=true), независимо от года создания ремонта.
+    """
+    import re
+    from . import db
+    
+    found_acts = {}
+    
+    try:
+        conn = db.connect()
+        
+        # 1. Собираем абсолютно все акты, которые есть в текущей таблице repairs
+        rows = conn.execute(
+            "SELECT et, anrp_number, act_number FROM repairs "
+            "WHERE (anrp_number IS NOT NULL AND anrp_number != '' AND anrp_number != 'None') "
+            "OR (act_number IS NOT NULL AND act_number != '' AND act_number != 'None')"
+        ).fetchall()
+        
+        for et, anrp, act in rows:
+            if et:
+                for val in (anrp, act):
+                    if val and str(val).strip().upper().startswith(("NSE", "ATO", "АТО")):
+                        found_acts[str(val).strip().upper()] = str(et).strip().upper()
+
+        # 2. Достаем скрытые привязки из комментариев и логов
+        try:
+            valid_ets = {r for r in conn.execute("SELECT et FROM repairs").fetchall() if r}
+            c_rows = conn.execute("SELECT et, text FROM comments WHERE text LIKE '%NSE%' OR text LIKE '%ATO%' OR text LIKE '%АТО%'").fetchall()
+            for et, text in c_rows:
+                clean_et = str(et).strip().upper()
+                if clean_et in valid_ets and text:
+                    match = re.search(r'\b(NSE|ATO|АТО)\d+\b', str(text), re.IGNORECASE)
+                    if match:
+                        found_acts[match.group(0).upper()] = clean_et
+                        
+            e_rows = conn.execute("SELECT et, data FROM events WHERE data LIKE '%NSE%' OR data LIKE '%ATO%' OR data LIKE '%АТО%'").fetchall()
+            for et, data_text in e_rows:
+                clean_et = str(et).strip().upper()
+                if clean_et in valid_ets and data_text:
+                    match = re.search(r'\b(NSE|ATO|АТО)\d+\b', str(data_text), re.IGNORECASE)
+                    if match:
+                        found_acts[match.group(0).upper()] = clean_et
+        except Exception:
+            pass
+
+        conn.close()
+    except Exception as e:
+        print(f"[API Сканер] Ошибка сбора актов из БД: {e}")
+
     out = []
-    for i in items:
-        if not i.get("current") or i.get("closed") or (i.get("status") or "") in skip:
-            continue
-        c = checks.get(i["et"])
+    hours = float(cfg.get("recheck_hours") or 20)
+    
+    for act_no, et in found_acts.items():
+        c = checks.get(et)
+        
+        # ВЕЧНОЕ КЭШИРОВАНИЕ: Если в локальной базе act_checks по этому ремонту
+        # УЖЕ записан утвержденный статус (1) — пропускаем этот ремонт НАВСЕГДА.
         if not full and c and not c.get("error"):
-            if c.get("anrp_ok") or c.get("ato_ok"):
+            if c.get("anrp_ok") == 1 or c.get("ato_ok") == 1 or c.get("anrp_id") or c.get("ato_id"):
                 continue
-            has_act = c.get("anrp_id") or c.get("ato_id")
-            if not has_act and (_iso(i.get("modified_at")) or "") == (c.get("modified_at") or ""):
+                
+            # Если акта на сервере Эллпы нет ( ErrorText: Не найден ), 
+            # кэшируем пустой ответ на 20 часов, чтобы не долбить сервер при каждом клике
+            if c.get("checked_at"):
                 try:
-                    age = now - datetime.strptime(c["checked_at"], "%Y-%m-%d %H:%M:%S")
-                except (TypeError, ValueError):
-                    age = timedelta(days=999)
-                if age < timedelta(hours=hours):
-                    continue
-        out.append(i)
-    rank = {s: n for n, s in enumerate(PRIORITY)}
-    out.sort(key=lambda i: (rank.get(i.get("status") or "", 99), i["et"]))
+                    checked_dt = datetime.strptime(c["checked_at"], "%Y-%m-%d %H:%M:%S")
+                    if now - checked_dt < timedelta(hours=hours):
+                        continue
+                except Exception:
+                    pass
+
+        item = {"et": et, "status": "Ремонт завершён", "current": 1}
+        item_copy = dict(item)
+        item_copy["forced_act_number"] = act_no
+        out.append(item_copy)
+
+    out.sort(key=lambda i: i["et"])
+    print(f"[API Планировщик] Найдено {len(out)} актов, требующих актуализации через SOAP.")
     return out
 
 
@@ -404,16 +568,74 @@ def act_from_check(c: dict | None) -> dict | None:
     """Акт для раздела из результата проверки: утверждённый (сначала АНРП), иначе созданный."""
     if not c:
         return None
-    from .parsing import from_iso
+        
+    from datetime import datetime
+    
+    # Безопасная функция ручной конвертации строк ISO в объекты datetime, 
+    # чтобы не зависеть от внешних файлов проекта
+    def _local_parse_iso(s: str | None):
+        if not s or not str(s).strip() or str(s).strip().startswith("0001-01-01"):
+            return None
+        try:
+            cleaned = str(s).strip().replace("T", " ")
+            # Отрезаем миллисекунды, если они есть
+            if "." in cleaned:
+                cleaned = cleaned.split(".")[0]
+            return datetime.strptime(cleaned, "%Y-%m-%d %H:%M:%S")
+        except Exception:
+            return None
+
     opts = []
+    
+    # Пытаемся вытащить человеческий номер акта из repairs по et
+    human_number = None
+    et_key = c.get("et")
+    if et_key:
+        try:
+            from . import db
+            conn = db.connect()
+            row = conn.execute("SELECT anrp_number, act_number FROM repairs WHERE et = ? LIMIT 1", (et_key,)).fetchone()
+            if row:
+                human_number = str(row[0] or row[1] or "").strip()
+            conn.close()
+        except Exception:
+            pass
+
+    # Перебираем АНРП и АТО структуры из записи базы act_checks
     for k, label in (("anrp", "АНРП"), ("ato", "АТО")):
-        if c.get(f"{k}_id"):
-            opts.append({"kind": label, "number": c[f"{k}_id"], "created": from_iso(c.get(f"{k}_created")),
-                         "approved": from_iso(c.get(f"{k}_approved")) if c.get(f"{k}_ok") else None,
-                         "note": c.get(f"{k}_note"), "conclusion": c.get("ato_conclusion") if k == "ato" else None})
+        is_ok = c.get(f"{k}_ok") == 1 or c.get(f"{k}_ok") is True
+        act_id_val = c.get(f"{k}_id")
+        
+        if act_id_val or is_ok:
+            display_number = str(act_id_val or "").strip()
+            # Если в базе лежит системный GUID, подменяем его на нормальный номер акта
+            if (not display_number or len(display_number) > 15) and human_number:
+                display_number = human_number
+                
+            if not display_number or display_number.lower() == 'none':
+                display_number = f"Утвержденный {label}"
+
+            created_dt = _local_parse_iso(c.get(f"{k}_created"))
+            approved_dt = _local_parse_iso(c.get(f"{k}_approved"))
+            
+            opts.append({
+                "kind": label,
+                "number": display_number,
+                "created": created_dt,
+                "approved": approved_dt if is_ok else None,
+                "note": c.get(f"{k}_note") or None,
+                "conclusion": c.get("ato_conclusion") if k == "ato" else None
+            })
+
     if not opts:
         return None
-    return next((o for o in opts if o["approved"]), opts[0])
+        
+    # Сначала возвращаем тот вариант, у которого заполнена дата утверждения
+    approved_opt = next((o for o in opts if o["approved"]), None)
+    if approved_opt:
+        return approved_opt
+        
+    return opts[0]
 
 
 # ------------------------------------------------------------------ фоновая проверка
@@ -466,9 +688,10 @@ class ActsJob:
                 def submit():
                     i = next(it, None)
                     if i is not None and not self.stop_flag.is_set():
-                        futs[ex.submit(check_one, sess, i["et"])] = i
+                        futs[ex.submit(check_one, sess, i)] = i
                 for _ in range(max(1, min(int(cfg.get("workers") or 4), 8)) * 2):
                     submit()
+                
                 while futs:
                     fut = next(as_completed(list(futs)))
                     i = futs.pop(fut)
@@ -476,9 +699,30 @@ class ActsJob:
                         res = fut.result()
                         save_check(conn, i, res)
                         fails = 0
-                        if any(res.get(k) for k in ("anrp", "ato")):
-                            with self.lock:
-                                self.state["found"] += 1
+                        if isinstance(i, dict) and i.get("et"):
+                            PROCESSED_CACHE.add(i["et"])
+                        
+                        anrp_data = res.get("anrp") if res else None
+                        ato_data = res.get("ato") if res else None
+
+                        # Проверяем, что из SOAP пришел реальный утвержденный акт без ошибок
+                        anrp_data = res.get("anrp") if res else None
+                        ato_data = res.get("ato") if res else None
+                        
+                        has_real_anrp = anrp_data and anrp_data.get("ok") and not anrp_data.get("note")
+                        has_real_ato = ato_data and ato_data.get("ok") and not ato_data.get("note")
+                        
+                        if has_real_anrp or has_real_ato:
+                            # Проверяем реальный статус ремонта в живой таблице repairs в SQLite
+                            # Если ремонт все еще в работе (его статус НЕ "ОТЧЕТ"), увеличиваем счетчик найденных проблем!
+                            db_row = conn.execute("SELECT status FROM repairs WHERE et = ? LIMIT 1", (i["et"],)).fetchone()
+                            if db_row and db_row[0]:
+                                current_status = str(db_row[0]).strip().upper()
+                                # Исключаем закрытые статусы (ОТЧЕТ, ОТМЕНЕН, ОПЛАЧЕН), как указано в твоем ТЗ
+                                if current_status not in ("ОТЧЕТ", "ОТМЕНЕН", "ОПЛАЧЕН", "ОТМЕНЁН"):
+                                    with self.lock:
+                                        self.state["found"] += 1
+                                    
                     except TrackingError as e:
                         save_check(conn, i, None, str(e))
                         fails += 1
@@ -490,6 +734,9 @@ class ActsJob:
                     with self.lock:
                         self.state["done"] += 1
                     submit()
+
+
+                
             if self.stop_flag.is_set() and result["status"] == "ok":
                 result = {"status": "stopped", "message": "Проверка остановлена."}
             db.set_meta(conn, "act_checks_info", {"at": db.now_iso(), **self.snapshot_counts(), **result})
@@ -507,6 +754,7 @@ class ActsJob:
                         pass
                 conn.close()
             self._set(running=False, finished_at=time.time(), result=result, message="")
+
 
     def snapshot_counts(self) -> dict:
         s = self.snapshot()
